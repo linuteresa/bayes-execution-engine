@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bayes Execution Engine</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            max-width: 700px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .result {
+            display: none;
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            border-radius: 6px;
+        }
+
+        .result.show {
+            display: block;
+        }
+
+        .result h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        .result-item {
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .result-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .result-label {
+            color: #667eea;
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .result-value {
+            color: #333;
+            font-size: 14px;
+            word-wrap: break-word;
+        }
+
+        .confidence {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .steps-list {
+            margin-top: 10px;
+        }
+
+        .step {
+            background: white;
+            padding: 10px;
+            margin: 5px 0;
+            border-left: 3px solid #667eea;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #555;
+        }
+
+        .error {
+            display: none;
+            padding: 15px;
+            background: #fee;
+            color: #c33;
+            border-left: 4px solid #c33;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+
+        .error.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Bayes Execution Engine</h1>
+        <p class="subtitle">Plan-and-Execute with Bayesian Confidence</p>
+
+        <form id="queryForm">
+            <div class="input-group">
+                <label for="question">Your Question:</label>
+                <textarea
+                    id="question"
+                    name="question"
+                    placeholder="e.g., What are the active users in the system? What high-priority tasks are assigned?"
+                    required
+                ></textarea>
+            </div>
+
+            <button type="submit" id="submitBtn">Ask Question</button>
+        </form>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Processing your question...</p>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div class="result" id="result">
+            <h3>📋 Result</h3>
+
+            <div class="result-item">
+                <div class="result-label">Response</div>
+                <div class="result-value" id="responseText"></div>
+            </div>
+
+            <div class="result-item">
+                <div class="result-label">Execution Stats</div>
+                <div class="result-value">
+                    <div>Steps Executed: <strong id="stepsCount"></strong></div>
+                    <div>Confidence Score: <span class="confidence" id="confidenceScore"></span></div>
+                </div>
+            </div>
+
+            <div class="result-item" id="stepsSection" style="display: none;">
+                <div class="result-label">Execution Steps</div>
+                <div class="steps-list" id="stepsList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('queryForm');
+        const questionInput = document.getElementById('question');
+        const submitBtn = document.getElementById('submitBtn');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const result = document.getElementById('result');
+        const responseText = document.getElementById('responseText');
+        const stepsCount = document.getElementById('stepsCount');
+        const confidenceScore = document.getElementById('confidenceScore');
+        const stepsSection = document.getElementById('stepsSection');
+        const stepsList = document.getElementById('stepsList');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const question = questionInput.value.trim();
+            if (!question) return;
+
+            // Show loading, hide results
+            loading.style.display = 'block';
+            result.classList.remove('show');
+            error.classList.remove('show');
+            submitBtn.disabled = true;
+
+            try {
+                const response = await fetch('/ask', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ question: question }),
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'An error occurred');
+                }
+
+                const data = await response.json();
+
+                // Display results
+                responseText.textContent = data.response;
+                stepsCount.textContent = data.steps_executed;
+                confidenceScore.textContent = (data.confidence_score * 100).toFixed(0) + '%';
+
+                // Show steps if any
+                if (data.past_steps && data.past_steps.length > 0) {
+                    stepsSection.style.display = 'block';
+                    stepsList.innerHTML = data.past_steps
+                        .map((step, i) => `
+                            <div class="step">
+                                <strong>Step ${i + 1}:</strong> ${step[0]}<br>
+                                <small>Result: ${step[1]}</small>
+                            </div>
+                        `)
+                        .join('');
+                } else {
+                    stepsSection.style.display = 'none';
+                }
+
+                result.classList.add('show');
+            } catch (err) {
+                error.textContent = 'Error: ' + err.message;
+                error.classList.add('show');
+            } finally {
+                loading.style.display = 'none';
+                submitBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
