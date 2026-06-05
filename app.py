@@ -1,9 +1,8 @@
 import os
-from typing import Literal
+from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
-
 from core.state import PlanExecuteState
 from nodes.planner import planner_node
 from nodes.executor import executor_node
@@ -11,7 +10,9 @@ from nodes.replanner import replanner_node
 
 load_dotenv()
 
-def should_continue(state: PlanExecuteState) -> Literal["executor", "END"]:
+app = Flask(__name__)
+
+def should_continue(state: PlanExecuteState):
     """Route to executor if plan remains, otherwise finish."""
     if state.get("response"):
         return "END"
@@ -44,13 +45,13 @@ def run_execution_engine(user_input: str):
     base_url = os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:8080/v1")
 
     model = ChatOpenAI(
-        model="gpt-3.5-turbo",  # Model name doesn't matter for local server
+        model="gpt-3.5-turbo",
         base_url=base_url,
-        api_key="not-needed",  # Local server doesn't require auth
+        api_key="not-needed",
         temperature=0,
     )
 
-    app = build_graph()
+    app_graph = build_graph()
 
     initial_state = {
         "input": user_input,
@@ -60,32 +61,35 @@ def run_execution_engine(user_input: str):
         "confidence_score": 1.0,
     }
 
-    print("\n" + "=" * 60)
-    print("BAYES EXECUTION ENGINE")
-    print("=" * 60)
-    print(f"Input: {user_input}\n")
-
-    final_state = app.invoke(
+    final_state = app_graph.invoke(
         initial_state,
         config={"configurable": {"model": model}},
     )
 
-    print("\n" + "=" * 60)
-    print("EXECUTION COMPLETE")
-    print("=" * 60)
-    print(f"Final Response: {final_state.get('response', 'No response')}")
-    print(f"Steps Executed: {len(final_state.get('past_steps', []))}")
-    print(f"Confidence Score: {final_state.get('confidence_score', 0.0):.2f}")
-    print()
+    return {
+        "response": final_state.get('response', 'No response'),
+        "steps_executed": len(final_state.get('past_steps', [])),
+        "confidence_score": final_state.get('confidence_score', 0.0),
+        "past_steps": final_state.get('past_steps', []),
+    }
 
-    return final_state
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-if __name__ == "__main__":
-    import sys
+@app.route('/ask', methods=['POST'])
+def ask():
+    data = request.get_json()
+    question = data.get('question', '').strip()
 
-    if len(sys.argv) > 1:
-        user_input = " ".join(sys.argv[1:])
-    else:
-        user_input = "What are the active users in the system and which high-priority tasks are assigned?"
+    if not question:
+        return jsonify({"error": "Question cannot be empty"}), 400
 
-    run_execution_engine(user_input)
+    try:
+        result = run_execution_engine(question)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True, host='127.0.0.1', port=5000)
