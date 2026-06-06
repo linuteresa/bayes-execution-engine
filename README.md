@@ -9,3 +9,5 @@ Standard AI agents (using the typical "ReAct" loop) are notoriously brittle. If 
 Plan-and-Execute (The DAG): Before taking a single action, your system forces the AI to map out the entire solution as a Directed Acyclic Graph (DAG). It decouples the "thinking" from the "doing."
 
 Bayesian Conflict Resolution: When the execution engine inevitably hits conflicting data, it does not rely on the LLM's text-generation to guess the right answer. Instead, it pauses the graph and runs a mathematical Bayesian update—calculating exact posterior probabilities across a perfectly allocated 125-state conditional probability matrix—to logically deduce the correct path forward.
+
+Also this features an option to run the code on a terminal or on the browser.
