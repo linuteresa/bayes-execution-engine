@@ -49,3 +49,6 @@ Also this features an option to run the code on a terminal or on the browser.
 - It looks at the original input, the steps completed so far, and the remaining plan.
 - If the system has gathered enough information to answer the user's prompt, it returns a final Response JSON.
 - If there is more work to be done, it can update the plan and return Plan JSON, keeping the execution loop going.
+
+
+<img width="1894" height="930" alt="image" src="https://github.com/user-attachments/assets/88a1bca7-52a8-45f5-aacf-e2bda2c3879f" />
