@@ -13,6 +13,10 @@ extend-exclude = ["_verify", "_verify2"]
 select = ["E", "F", "I", "B"]  # pycodestyle, pyflakes, isort, bugbear
 ignore = ["E501"]  # long docstrings/tables allowed
 
+[tool.ruff.lint.isort]
+
+known-first-party = ["core", "nodes", "bayesian_engine", "scaling", "persistence", "service"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
