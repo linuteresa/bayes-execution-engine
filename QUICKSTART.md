@@ -1,6 +1,6 @@
 # Quickstart: Run & Verify
 
-This guide gets the engine running and — more importantly — shows how to **prove the
+This guide gets the engine running and more importantly, shows how to **prove the
 Bayesian core works without any model running**, since that logic is fully deterministic.
 
 ## Prerequisites
@@ -43,7 +43,7 @@ python main.py "Which high-priority tasks are assigned and to whom?"
 # (b) Simple web UI
 python app.py                      # http://127.0.0.1:5000
 
-# (c) Async submit/poll API (production-shaped)
+# (c) Async submit/poll API 
 uvicorn service.api:app --port 8000
 ```
 
@@ -59,9 +59,13 @@ curl localhost:8000/jobs/<id>
 
 Or bring up model + engine together: `docker compose up` (see `docker-compose.yml`).
 
+> **Note:** the executor is a *mock* standing in for real enterprise tools (DB queries,
+> API calls). It does not ask the model to answer your question directly — see the README
+> "How It Works" section. Use the deterministic checks below to verify the engine.
+
 ---
 
-## 3. Verify — no model required (this is the real proof)
+## 3. Verify 
 
 The Bayesian engine is deterministic, so its correctness can be demonstrated with zero
 LLM involvement.
@@ -94,9 +98,7 @@ python -c "from bayesian_engine.bayes_engine import resolve_conflict; import jso
 }
 ```
 
-Run it **twice — the numbers are identical.** (The previous implementation produced
-*different random* numbers on every call; making this deterministic and data-driven is
-the central fix.) Flip the evidence to all-zeros
+Run it **twice — the numbers are identical.** Flip the evidence to all-zeros
 (`{'TaskStatus':0,'DataQuality':0,'ToolReliability':0}`) and it resolves to `CERTAIN`.
 
 Watch the posterior move with data (conjugate update):
@@ -135,30 +137,35 @@ decision-relevant signal.
 
 ## 4. What a full end-to-end run looks like
 
-`python main.py "..."` runs Planner (LLM) → Executor (one DAG step at a time) →
-Replanner (LLM), and finishes with:
+`python main.py "..."` runs Planner (LLM) → Executor → Replanner (LLM). The executor
+runs each step by sampling your model several times and measuring how much the samples
+agree (see [docs/EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)), so the answer is real and
+the confidence is earned:
 
 ```
 ============================================================
 EXECUTION COMPLETE
 ============================================================
-Final Response: <natural-language answer from the model>
+Final Response: <natural-language answer synthesised from the executed steps>
 Steps Executed: 3
-Confidence Score: 0.31
+Confidence Score: 0.78
 ```
 
-What to expect, honestly:
+What to expect:
 
-- **`Confidence Score` and `Steps Executed` are deterministic and meaningful.** When an
-  executed step hits ambiguity (e.g. a "query" / "validate" step, which the mock executor
-  returns as conflicting), the Bayesian engine fires and confidence drops to ~0.31. You'll
-  also see a structured `bayes.conflict_resolved` JSON log line containing the confidence,
-  credible interval, and the evidence-matrix coordinates.
-- **The natural-language `Final Response` depends on the model.** Qwen2.5-3B-Instruct
-  handles the planner's JSON well; if a small model ever returns malformed JSON you may see
-  `Steps Executed: 0` and a fallback response. That's a model limitation, not an engine bug
-  — which is exactly why the deterministic checks in section 3 are the real proof of the
-  engineering.
+- **Real answers.** Each step is executed by the model; the consensus (medoid) answer
+  flows to the replanner, which synthesizes the final response. This is no longer a mock.
+- **Confidence is measured, not faked.** `Confidence Score` is the posterior probability
+  the step outputs are high quality, derived from how consistently the model answered. Ask
+  it something the model is solid on → high confidence; ask something ambiguous or beyond
+  the model → the samples scatter, the Bayesian engine flags a conflict, and confidence
+  drops, with a `bayes.conflict_resolved` log line showing the evidence matrix.
+- **It costs N× tokens per step** (default 4 samples). Tune with `EXECUTOR_SAMPLES` and
+  `EXECUTOR_TEMPERATURE`. Set `EXECUTOR_SAMPLES=1` to disable self-consistency (fastest,
+  but you lose the agreement signal).
+- If a small model returns malformed planner JSON, the hardened parser still extracts it
+  in most cases; in the worst case the replanner surfaces the gathered step results rather
+  than failing silently.
 
 ---
 

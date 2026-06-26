@@ -25,19 +25,7 @@ decoupling and the API contract.
 **Production topology (blueprint):** replace the thread pool with a broker and workers.
 The API contract above is unchanged.
 
-```mermaid
-flowchart LR
-    C[Clients] --> LB[Load balancer]
-    LB --> API[FastAPI replicas<br/>stateless]
-    API -->|publish job| K[(Kafka / RabbitMQ<br/>requests topic)]
-    K --> W1[Engine worker]
-    K --> W2[Engine worker]
-    W1 --> ST[(Redis / Postgres<br/>state + checkpoints)]
-    W2 --> ST
-    W1 -->|publish result| RK[(results topic)]
-    API -. subscribe .-> RK
-    API --> ST
-```
+![img_1.png](img_1.png)
 
 - **API replicas** are stateless and sit behind the load balancer; any replica serves
   any client.

@@ -3,7 +3,7 @@ Dirichlet–Multinomial conjugate Bayesian engine for agentic conflict resolutio
 
 Why this exists
 ---------------
-When the Plan-and-Execute DAG hits conflicting / uncertain tool output, we do NOT
+When the Plan-and-Execute DAG hits conflicting / uncertain tool output, I do NOT
 ask the LLM to "guess again". We run a real Bayesian update over a small, fully
 interpretable model and pick the action with the highest *posterior-predictive*
 confidence, together with a calibrated uncertainty estimate.
@@ -26,7 +26,7 @@ choice (and not, say, a Gaussian or a hand-tuned softmax):
     No gradient steps, no sampling, fully reproducible, O(1) online updates.
   * The Dirichlet lives on the probability simplex, so every posterior-predictive
     column is automatically a valid distribution that sums to 1 -- by construction,
-    not by a normalising hack.
+    not by a normalizing hack.
   * The concentration sum ``alpha_0 = sum(alpha)`` IS the model's effective sample
     size, which gives us free, principled uncertainty quantification (credible
     intervals shrink as we observe more data).
@@ -44,7 +44,7 @@ from typing import Dict, Iterable, Optional, Tuple
 
 import numpy as np
 
-# Ordinal semantic states, shared by parents and the outcome.
+
 STATE_NAMES: Dict[int, str] = {0: "CERTAIN", 1: "HIGH", 2: "MEDIUM", 3: "LOW", 4: "AMBIGUOUS"}
 STATE_MAP: Dict[str, int] = {v: k for k, v in STATE_NAMES.items()}
 
@@ -72,13 +72,13 @@ def context_triple(idx: int) -> Tuple[int, int, int]:
 class PosteriorSummary:
     """Result of a conflict-resolution query."""
 
-    state: str                       # MAP outcome name
-    state_index: int                 # MAP outcome index
-    confidence: float                # posterior-predictive prob of the MAP state
-    distribution: Dict[str, float]   # full posterior-predictive distribution
-    credible_low: float              # 95% credible-interval lower bound for MAP prob
-    credible_high: float             # 95% credible-interval upper bound for MAP prob
-    effective_sample_size: float     # alpha_0 for the queried context (prior + data)
+    state: str
+    state_index: int
+    confidence: float
+    distribution: Dict[str, float]
+    credible_low: float
+    credible_high: float
+    effective_sample_size: float
 
     def as_dict(self) -> dict:
         return {
@@ -122,7 +122,7 @@ class DirichletBayesianEngine:
         Intuition: state index 0 = CERTAIN (best), 4 = AMBIGUOUS (worst). The more
         degraded the three input signals are, the more prior mass the Outcome should
         place on degraded states. We encode this as a Gaussian bump centred at the
-        normalised aggregate degradation of the three parents.
+        normalized aggregate degradation of the three parents.
         """
         alpha = np.empty((N_CONTEXTS, N_STATES), dtype=float)
         outcomes = np.arange(N_STATES)
@@ -159,7 +159,7 @@ class DirichletBayesianEngine:
         """Posterior-predictive CPT, shape ``(5_outcome, 125_context)``.
 
         Column = E[theta | data] = alpha / alpha_0. Each column sums to 1 by
-        construction (a property of the Dirichlet mean, not a renormalisation).
+        construction (a property of the Dirichlet mean, not a renormalization).
         """
         return (self.alpha / self.alpha.sum(axis=1, keepdims=True)).T
 
@@ -170,7 +170,7 @@ class DirichletBayesianEngine:
     def _marginal_predictive(self, evidence: Dict[str, int]) -> Tuple[np.ndarray, float]:
         """Posterior-predictive over Outcome given *full or partial* evidence.
 
-        Missing parents are marginalised out under a uniform parent prior. This is
+        Missing parents are marginalized out under a uniform parent prior. This is
         what makes the network structure (rather than a flat lookup table) earn its
         keep: we can still answer when a signal is unobserved.
         """
@@ -219,8 +219,7 @@ class DirichletBayesianEngine:
     def _beta_credible_interval(
         self, evidence: Dict[str, int], outcome_idx: int, mass: float = 0.95
     ) -> Tuple[float, float]:
-        # Only well-defined for a single context; for partial evidence we average
-        # the concentration across the consistent contexts to report a representative CI.
+
         ranges = [
             [evidence[name]] if name in evidence else range(N_STATES) for name in PARENTS
         ]
@@ -239,7 +238,7 @@ class DirichletBayesianEngine:
             tail = (1.0 - mass) / 2.0
             return float(beta.ppf(tail, a_k, a_rest)), float(beta.ppf(1 - tail, a_k, a_rest))
         except Exception:
-            # Normal approximation to the Beta if SciPy is unavailable.
+
             a0 = a_k + a_rest
             mean = a_k / a0
             var = a_k * a_rest / (a0 ** 2 * (a0 + 1))
@@ -250,7 +249,7 @@ class DirichletBayesianEngine:
     def build_network(self):
         """Return an equivalent ``pgmpy`` DiscreteBayesianNetwork.
 
-        Useful for visualisation and for exact inference with *arbitrary* query/
+        Useful for visualization and for exact inference with *arbitrary* query/
         evidence patterns. Imported lazily so pgmpy stays an optional dependency.
         """
         from pgmpy.factors.discrete import TabularCPD

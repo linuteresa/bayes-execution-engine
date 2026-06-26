@@ -80,14 +80,13 @@ def extract_evidence(task: str, result: str) -> EvidenceVector:
         (w for term, w in _POSITIVE_TERMS.items() if term in text), default=4
     )
 
-    # DataQuality: conflicts/uncertainty degrade quality.
+
     data_quality = _clip(conflict_score)
 
-    # TaskStatus: a clean positive completion keeps status good; conflicts degrade it.
+
     task_status = _clip(max(positive_score, conflict_score - 1))
 
-    # ToolReliability: explicit failure/retry/timeout terms degrade reliability;
-    # numeric, specific output is a mild reliability signal.
+
     reliability_terms = ("error", "failed", "timeout", "retry")
     reliability_hit = max(
         (_CONFLICT_TERMS[t] for t in reliability_terms if t in text), default=0
@@ -101,4 +100,7 @@ def extract_evidence(task: str, result: str) -> EvidenceVector:
 def is_conflict(result: str) -> bool:
     """Cheap gate: does this result warrant a Bayesian update at all?"""
     text = result.lower()
-    return any(term in text for term in ("conflict", "uncertain", "disagree", "ambiguous", "missing"))
+    return any(
+        term in text
+        for term in ("conflict", "uncertain", "disagree", "ambiguous", "missing", "error", "failed", "timeout")
+    )

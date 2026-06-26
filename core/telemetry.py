@@ -6,7 +6,7 @@ log pipeline (Datadog / Loki / CloudWatch) or an OpenTelemetry collector can bui
 dashboards and alerts on, e.g., the rate of low-confidence conflict resolutions or
 the distribution of the 125-state evidence matrix.
 
-We deliberately keep zero hard dependencies: if ``OTEL_EXPORTER_OTLP_ENDPOINT`` is
+I deliberately keep zero hard dependencies: if ``OTEL_EXPORTER_OTLP_ENDPOINT`` is
 set and the OpenTelemetry SDK is installed, spans are exported; otherwise tracing is
 a no-op and only structured logs are written.
 """
@@ -34,7 +34,7 @@ class _JsonFormatter(logging.Formatter):
             "event": record.getMessage(),
         }
         if hasattr(record, "extra_fields"):
-            payload.update(record.extra_fields)  # type: ignore[attr-defined]
+            payload.update(record.extra_fields)
         return json.dumps(payload, default=str)
 
 
@@ -91,7 +91,7 @@ def span(name: str, trace_id: Optional[str] = None, **attributes: Any) -> Iterat
 
     otel_span_cm = None
     if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        try:  # pragma: no cover - exercised only when OTEL is installed/configured
+        try:
             from opentelemetry import trace as _otel_trace
 
             tracer = _otel_trace.get_tracer(_LOGGER_NAME)

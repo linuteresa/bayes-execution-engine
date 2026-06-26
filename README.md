@@ -10,19 +10,11 @@ decouples *thinking* (a planned DAG of steps) from *doing*, and when execution h
 ambiguity it **pauses and runs a real Bayesian update** to decide how confident the
 result is — with calibrated uncertainty, not a vibe.
 
-> **What changed from v0 (and why it matters):** the original engine generated a
-> *random* conditional probability table on every call (`np.random.dirichlet(...)`
-> with no prior and no data), so "conflict resolution" returned essentially random
-> answers. The engine is now a genuine **Dirichlet–Multinomial conjugate model** with
-> an informative prior and closed-form posterior updates. See
-> [docs/BAYESIAN_DESIGN.md](docs/BAYESIAN_DESIGN.md).
-
----
 
 ## Table of contents
 
 - [Architecture](#architecture)
-- [The Bayesian core (the interesting part)](#the-bayesian-core-the-interesting-part)
+- [The Bayesian core ](#the-bayesian-core-the-interesting-part)
 - [Scaling to 10,000+ states](#scaling-to-10000-states)
 - [Running it](#running-it)
 - [System design & production concerns](#system-design--production-concerns)
@@ -38,37 +30,13 @@ The orchestration is a LangGraph `StateGraph`. A shared `PlanExecuteState` flows
 between three nodes; the executor calls the Bayesian engine only when it detects a
 conflict.
 
-```mermaid
-flowchart LR
-    START([START]) --> P[Planner<br/>LLM builds a DAG of steps]
-    P --> E[Executor<br/>runs one step]
-    E -->|conflict / ambiguous| B{{Bayesian Engine<br/>posterior update}}
-    B --> E
-    E --> R[Replanner<br/>continue or finish?]
-    R -->|plan remains| E
-    R -->|done| END([END])
-```
+![img.png](img.png)
 
 For long-running prompts the engine runs as an **event-driven service** so the LLM
 work never blocks (or times out) an HTTP request:
-
+![img_1.png](img_1.png)
 ```mermaid
-sequenceDiagram
-    participant C as Client
-    participant API as FastAPI
-    participant Q as Queue / Worker pool
-    participant ENG as Engine + Bayesian core
-    participant S as State store (Redis/Postgres)
-    C->>API: POST /jobs {question}
-    API->>S: persist job (queued)
-    API-->>C: 202 {job_id}
-    API->>Q: enqueue
-    Q->>ENG: run DAG (checkpointed per step)
-    ENG->>S: write checkpoints + result
-    C->>API: GET /jobs/{id}
-    API->>S: read
-    API-->>C: status / result
-```
+
 
 In this repo the "queue/worker pool" is a `ThreadPoolExecutor`, which is enough to
 prove the decoupling. The contract (`POST /jobs` → poll `GET /jobs/{id}`) is identical
@@ -77,15 +45,68 @@ to a production broker-backed deployment — see
 
 ---
 
-## The Bayesian core (the interesting part)
+## Execution model: self-consistency → real evidence
+
+Full detail in **[docs/EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)**.
+
+The executor doesn't run a step once and trust it. When an LLM is configured, it runs
+each step by **sampling the model several times** (temperature > 0) and measuring how
+much the samples agree (`nodes/llm_executor.py`). Disagreement among a model's own
+samples is a well-established proxy for uncertainty/hallucination (self-consistency,
+Wang et al. 2022). From those samples it derives the three ordinal signals the Bayesian
+engine consumes — from **real measurements**, not keywords:
+
+- `DataQuality` ← semantic agreement across samples,
+- `TaskStatus` ← answerability (fraction of non-refusal samples),
+- `ToolReliability` ← answer dispersion (how many distinct answers).
+
+The consensus (medoid) answer flows to the replanner; the agreement signal flows to the
+Bayesian engine. So the conflict resolver now fires on **genuine model uncertainty**, and
+the per-step confidence is the posterior probability the answer is high-quality. When no
+LLM is supplied (unit tests / offline), the executor falls back to a deterministic mock
+that simulates conflicting enterprise tools.
+
+### See it in one screen
+
+```bash
+python demo.py --sim     # no model needed; --sim forces the simulation
+```
+
+prints a confident vs. an ambiguous prompt side by side:
+
+```
+CONFIDENT  "What is the capital of France?"    self-consistency 1.00  CONFIDENCE 0.72  (CERTAIN)
+AMBIGUOUS  "...Bitcoin price next Tuesday?"    self-consistency 0.15  CONFIDENCE 0.34  (conflict)
+```
+
+Drop `--sim` to run it against your live llama.cpp model.
+
+## What you can ask it
+
+The executor answers each step from the **local model's own knowledge** — no web access,
+no private data. So it suits questions the model can reason about, ideally multi-step ones:
+
+- Explanations & how-tos: *"Explain how RSA encryption works and why it's secure."*
+- Comparisons & trade-offs: *"Compare REST and gRPC and when to use each."*
+- Decomposable reasoning: *"Outline the steps to containerize a Python app and why each matters."*
+
+The point worth demoing is the **confidence contrast**: ask something the model is solid on
+and you get high confidence; ask something obscure or genuinely ambiguous and the samples
+scatter, a conflict is logged, and confidence drops.
+
+Poor fits, by design: real-time / current information, anything needing private data or
+external tools, and hard trivia/math where a small model guesses (self-consistency will
+correctly report low confidence, but the answer itself won't be reliable). With a 3B model
+the value is the orchestration + calibrated confidence, not raw answer quality.
+
+## The Bayesian core 
 
 Full derivation in **[docs/BAYESIAN_DESIGN.md](docs/BAYESIAN_DESIGN.md)**. The short
 version:
 
-When a step produces conflicting output, the engine maps that observation into three
-ordinal signals — `TaskStatus`, `DataQuality`, `ToolReliability`, each in
-`{CERTAIN, HIGH, MEDIUM, LOW, AMBIGUOUS}` — and asks: *given these signals, what is the
-distribution over the true outcome quality?*
+The engine maps an execution observation into three ordinal signals — `TaskStatus`,
+`DataQuality`, `ToolReliability`, each in `{CERTAIN, HIGH, MEDIUM, LOW, AMBIGUOUS}` — and
+asks: *given these signals, what is the distribution over the true outcome quality?*
 
 For each of the `5 × 5 × 5 = 125` signal contexts, `P(Outcome | context)` is a
 **Categorical** distribution. The conjugate prior of a Categorical is the
@@ -237,29 +258,54 @@ collapses (a failing tool schema). See [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIG
 
 ## Testing & CI
 
-- **40 unit tests** covering conjugate-update correctness, prior monotonicity, CPT
-  normalisation, evidence extraction, DAG routing, the scaling pipeline, and the job
-  store. Run: `pytest`.
+- **60 unit tests** covering conjugate-update correctness, prior monotonicity, CPT
+  normalisation, self-consistency evidence extraction, tolerant JSON parsing, DAG routing
+  and replanner fallbacks, the scaling pipeline, and the job store. Run: `pytest`.
 - **GitHub Actions** (`.github/workflows/ci.yml`) runs `ruff` lint + the full test
   suite on a Python 3.10/3.11/3.12 matrix, then builds the Docker image — on every push
   and PR.
 
 ---
 
+## Roadmap / future scope
+
+Natural extensions, roughly in order of value:
+
+- **Semantic agreement.** Replace bag-of-words cosine with sentence embeddings or an NLI
+  model so self-consistency credits paraphrases and penalises same-words/different-meaning
+  answers. The `llm_executor` interface is built to swap this in without touching the rest.
+- **Online learning of the CPT.** Feed observed `(evidence, outcome)` pairs back through the
+  conjugate update (`engine.observe`) — e.g. using user feedback or a verifier as the
+  outcome label — so the Dirichlet posterior adapts to a deployment instead of staying at
+  its prior.
+- **Real tools behind the executor.** Swap the single-LLM step for typed tools/MCP calls
+  (DB, retrieval, APIs); run a step against *multiple* sources and let genuine cross-source
+  disagreement drive the Bayesian update.
+- **Confidence-driven control flow.** Use the credible interval (not just the point
+  estimate) to decide when to re-plan, escalate to a larger model, or ask the user — turning
+  confidence into an actual routing policy.
+- **Broker-backed scaling.** Replace the in-process worker pool with Kafka/RabbitMQ + Celery
+  and a shared Redis/Postgres checkpointer (designed for in `docs/SYSTEM_DESIGN.md`).
+- **Calibration evaluation.** Add reliability diagrams / ECE on a labelled set to show the
+  reported confidences are actually calibrated, not just monotonic.
+
 ## Repository layout
 
 ```
 bayesian_engine/bayes_engine.py   Dirichlet–Multinomial conjugate engine
 core/signals.py                   raw tool output  -> ordinal evidence
+core/json_utils.py                tolerant JSON extraction for small-LLM output
 core/telemetry.py                 structured JSON logging + tracing
 core/graph.py                     LangGraph wiring (shared by CLI/UI/API)
 core/llm.py                       llama.cpp client (OpenAI-compatible, local)
+nodes/llm_executor.py             self-consistency execution + evidence extraction
 nodes/                            planner / executor / replanner
 scaling/latent_bayes.py           PCA latent-space scaling proof-of-concept
 service/api.py                    async FastAPI submit/poll service
 persistence/                      job store + LangGraph checkpointer factory
-tests/                            pytest suite
-docs/                             design deep-dives
+demo.py                           side-by-side confident vs ambiguous confidence demo
+tests/                            pytest suite (60 tests)
+docs/                             design deep-dives (Bayesian, execution, scaling, system)
 ```
 
 <img width="1894" height="930" alt="UI screenshot" src="https://github.com/user-attachments/assets/88a1bca7-52a8-45f5-aacf-e2bda2c3879f" />

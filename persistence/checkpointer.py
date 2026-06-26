@@ -34,27 +34,27 @@ def build_checkpointer() -> Optional[Any]:
 
     if backend == "redis":
         try:
-            from langgraph.checkpoint.redis import RedisSaver  # type: ignore
+            from langgraph.checkpoint.redis import RedisSaver
 
             return RedisSaver.from_conn_string(
                 os.getenv("REDIS_URL", "redis://localhost:6379/0")
             )
         except Exception:
-            pass  # fall through to in-memory
+            pass
 
     if backend == "postgres":
         try:
-            from langgraph.checkpoint.postgres import PostgresSaver  # type: ignore
+            from langgraph.checkpoint.postgres import PostgresSaver
 
             return PostgresSaver.from_conn_string(
                 os.getenv("POSTGRES_DSN", "postgresql://localhost:5432/bayes")
             )
         except Exception:
-            pass  # fall through to in-memory
+            pass
 
     try:
         from langgraph.checkpoint.memory import MemorySaver
 
         return MemorySaver()
-    except Exception:  # pragma: no cover - langgraph always ships MemorySaver
+    except Exception:
         return None

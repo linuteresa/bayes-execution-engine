@@ -3,18 +3,18 @@ Scaling the Bayesian conflict resolver from 125 to 10,000+ environmental states.
 
 The core engine reasons over a hand-designed 3-signal / 5-state grid (125 contexts).
 That is interpretable but does not scale: if a production agent exposes, say, 8 noisy
-telemetry signals discretised into 5 bins each, the naive context space explodes to
+telemetry signals discretized into 5 bins each, the naive context space explodes to
 ``5**8 = 390,625`` states. Estimating a Dirichlet per state is then hopeless -- almost
 every state is visited zero or one time, so the posterior never moves off its prior.
 
 Strategy: *reduce, then reason*.
 --------------------------------
-1. Standardise the raw, high-dimensional, correlated signal vector.
+1. Standardize the raw, high-dimensional, correlated signal vector.
 2. Project it onto a low-dimensional latent manifold with PCA (a stand-in for any
    manifold-learning method -- UMAP / autoencoder / random projection all slot in
    behind the same interface). Real agent signals are highly correlated, so a handful
    of components captures most of the variance.
-3. Discretise each latent axis into quantile bins, yielding a small, *dense* context
+3. Discretize each latent axis into quantile bins, yielding a small, *dense* context
    grid (e.g. 3 components x 5 bins = the same 125 states the core engine already uses).
 4. Run the conjugate Dirichlet-Multinomial update in that latent grid.
 
@@ -42,7 +42,7 @@ except Exception:  # pragma: no cover
 class GeneralDirichletGrid:
     """Conjugate Dirichlet-Multinomial model over an arbitrary discrete context grid.
 
-    Generalises the core engine: ``n_factors`` discrete factors, ``n_bins`` states
+    Generalizes the core engine: ``n_factors`` discrete factors, ``n_bins`` states
     each, predicting one of ``n_outcomes`` outcomes. Storage is dense over
     ``n_bins ** n_factors`` contexts -- which is exactly why we keep that number small
     by reducing dimensionality first.
@@ -134,7 +134,7 @@ def make_synthetic_agent_signals(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Generate correlated high-dim signals driven by a few latent degradation factors.
 
-    The label is a discretised function of the latent factors, so a good pipeline
+    The label is a discretized function of the latent factors, so a good pipeline
     should recover it after projecting back down. Mirrors reality: many telemetry
     channels, few underlying causes.
     """

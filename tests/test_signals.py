@@ -27,6 +27,10 @@ def test_error_terms_lower_reliability():
     assert ev.tool_reliability >= 3
 
 
+def test_tool_failure_triggers_conflict_resolution():
+    assert is_conflict("search_error: failed to retrieve current web results")
+
+
 def test_no_conflict_for_plain_result():
     assert not is_conflict("executed: summarise the report")
 

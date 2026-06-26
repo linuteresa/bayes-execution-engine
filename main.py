@@ -22,6 +22,10 @@ def main(user_input: str) -> None:
     print("\n" + "=" * 60)
     print("EXECUTION COMPLETE")
     print("=" * 60)
+    if result.get("error"):
+        print(f"Error: {result['error']}")
+        print()
+        return
     print(f"Final Response: {result['response']}")
     print(f"Steps Executed: {result['steps_executed']}")
     print(f"Confidence Score: {result['confidence_score']:.2f}")

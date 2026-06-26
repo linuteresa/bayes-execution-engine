@@ -29,7 +29,7 @@ def ask():
         return jsonify({"error": "Question cannot be empty"}), 400
     try:
         return jsonify(run_execution_engine(question))
-    except Exception as exc:  # noqa: BLE001 - surface error to the client
+    except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
 

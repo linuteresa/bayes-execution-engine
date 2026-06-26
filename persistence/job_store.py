@@ -26,7 +26,7 @@ from typing import Any, Dict, Optional, Protocol
 @dataclass
 class Job:
     id: str
-    status: str = "queued"  # queued -> running -> done | error
+    status: str = "queued"
     prompt: str = ""
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
@@ -72,7 +72,7 @@ class RedisJobStore:
     """Redis-backed store. Survives restarts; shared across workers/replicas."""
 
     def __init__(self, url: Optional[str] = None, ttl_seconds: int = 86400) -> None:
-        import redis  # imported lazily so redis stays optional
+        import redis
 
         self._r = redis.Redis.from_url(url or os.getenv("REDIS_URL", "redis://localhost:6379/0"))
         self._ttl = ttl_seconds

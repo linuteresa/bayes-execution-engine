@@ -25,7 +25,6 @@ services:
       - "8000:8000"
 
   # Optional: enable durable job store + checkpoints by setting JOB_STORE=redis
-  # and CHECKPOINTER=redis, then uncommenting this service.
   # redis:
   #   image: redis:7-alpine
   #   ports: ["6379:6379"]

@@ -3,6 +3,7 @@
 import pytest
 
 from nodes.executor import executor_node, simple_executor
+from nodes.replanner import _filter_repeated_steps, replanner_node
 
 
 def _state(plan):
@@ -10,7 +11,7 @@ def _state(plan):
 
 
 def test_executor_clean_step_keeps_confidence():
-    result = executor_node(_state(["search for data"]))
+    result = executor_node(_state(["summarize data"]))
     assert result["confidence_score"] == 1.0
     assert len(result["plan"]) == 0
     assert len(result["past_steps"]) == 1
@@ -50,6 +51,30 @@ def test_simple_executor_routing():
     assert simple_executor("do thing").startswith("executed")
 
 
+def test_replanner_filters_completed_and_duplicate_steps():
+    completed = {"step 1", "step 2"}
+    steps = [" Step 1 ", "step 3", "step 3", "step 2", "step 4"]
+
+    assert _filter_repeated_steps(steps, completed) == ["step 3", "step 4"]
+
+
+def test_replanner_falls_back_to_remaining_plan_when_model_repeats_completed(monkeypatch):
+    class FakeReplanner:
+        def invoke(self, _payload):
+            return '{"action": "plan", "steps": ["step 1"]}'
+
+    monkeypatch.setattr("nodes.replanner.create_replanner", lambda _model: FakeReplanner())
+    state = {
+        "input": "test",
+        "plan": ["step 2"],
+        "past_steps": [("step 1", "executed: step 1")],
+        "response": "",
+        "confidence_score": 1.0,
+    }
+
+    assert replanner_node(state, {"configurable": {"model": object()}}) == {"plan": ["step 2"]}
+
+
 def test_graph_routing():
     """should_continue routes correctly. Requires langgraph (skip otherwise)."""
     pytest.importorskip("langgraph")
@@ -58,6 +83,21 @@ def test_graph_routing():
     assert should_continue({"response": "done", "plan": ["x"]}) == "END"
     assert should_continue({"response": "", "plan": ["x"]}) == "executor"
     assert should_continue({"response": "", "plan": []}) == "END"
+
+
+def test_run_execution_engine_returns_friendly_error_when_llm_is_down(monkeypatch):
+    from core.graph import run_execution_engine
+
+    def _raise_connection_error(*args, **kwargs):
+        raise RuntimeError("Connection error")
+
+    monkeypatch.setattr("core.graph.build_llm", _raise_connection_error)
+
+    result = run_execution_engine("what is life?")
+
+    assert result["steps_executed"] == 0
+    assert result["confidence_score"] == 0.0
+    assert "Local LLM is unavailable" in result["error"]
 
 
 if __name__ == "__main__":

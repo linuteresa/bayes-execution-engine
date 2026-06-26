@@ -5,7 +5,7 @@ Why async + a job queue
 -----------------------
 A Plan-and-Execute run makes several LLM calls and can take tens of seconds. Doing
 that inside a synchronous request invites gateway/load-balancer timeouts and ties up
-a worker per in-flight prompt. Instead we use the classic *submit / poll* pattern:
+a worker per in-flight prompt. Instead, we use the classic *submit / poll* pattern:
 
     POST /jobs        -> 202 Accepted, returns {job_id}        (returns instantly)
     GET  /jobs/{id}   -> job status, and the result once done
@@ -55,8 +55,12 @@ def _run_job(job_id: str, question: str, thread_id: str) -> None:
     try:
         checkpointer = build_checkpointer()
         result = run_execution_engine(question, checkpointer=checkpointer, thread_id=thread_id)
-        _store.update(job_id, status="done", result=result)
-        log_event("job.done", job_id=job_id, confidence=result.get("confidence_score"))
+        if result.get("error"):
+            _store.update(job_id, status="error", error=result["error"], result=result)
+            log_event("job.error", job_id=job_id, error=result["error"])
+        else:
+            _store.update(job_id, status="done", result=result)
+            log_event("job.done", job_id=job_id, confidence=result.get("confidence_score"))
     except Exception as exc:  # noqa: BLE001
         _store.update(job_id, status="error", error=str(exc))
         log_event("job.error", job_id=job_id, error=str(exc))

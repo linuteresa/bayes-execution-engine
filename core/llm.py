@@ -4,15 +4,6 @@ Local LLM client for llama.cpp.
 This project targets **local** inference only: a model downloaded from Hugging Face
 (GGUF) and served by ``llama-server`` (the server that ships with llama.cpp).
 
-Why we still import ``langchain_openai.ChatOpenAI``
----------------------------------------------------
-``llama-server`` exposes an **OpenAI-compatible** HTTP API at ``/v1`` (this is a
-llama.cpp feature, not a dependency on OpenAI). ``ChatOpenAI`` is simply the most
-convenient, well-supported client for *any* OpenAI-compatible endpoint. Pointed at
-``http://localhost:8080/v1`` with a throwaway API key, no request ever leaves the
-machine and OpenAI's servers are never contacted. We keep the client but make the
-intent explicit here, in one place.
-
 Start the server, e.g.:
 
     llama-server -m ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080

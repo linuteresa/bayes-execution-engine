@@ -6,6 +6,7 @@ defined exactly once.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Literal, Optional
 
 from langgraph.graph import END, START, StateGraph
@@ -16,6 +17,14 @@ from core.telemetry import span
 from nodes.executor import executor_node
 from nodes.planner import planner_node
 from nodes.replanner import replanner_node
+
+_LLM_UNAVAILABLE_PHRASES = (
+    "connection error",
+    "connection refused",
+    "actively refused",
+    "failed to connect",
+    "api connection error",
+)
 
 
 def should_continue(state: PlanExecuteState) -> Literal["executor", "END"]:
@@ -54,26 +63,49 @@ def run_execution_engine(
     thread_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run the full orchestration for one prompt and return a result dict."""
-    model = build_llm()
-    app_graph = build_graph(checkpointer=checkpointer)
+    try:
 
-    initial_state = {
-        "input": user_input,
-        "plan": [],
-        "past_steps": [],
-        "response": "",
-        "confidence_score": 1.0,
-    }
-    config: Dict[str, Any] = {"configurable": {"model": model}}
-    if thread_id is not None:
-        config["configurable"]["thread_id"] = thread_id
+        model = build_llm(temperature=0.0)
+        executor_model = build_llm(temperature=float(os.getenv("EXECUTOR_TEMPERATURE", "0.7")))
+        app_graph = build_graph(checkpointer=checkpointer)
 
-    with span("engine.run", input=user_input, thread_id=thread_id):
-        final_state = app_graph.invoke(initial_state, config=config)
+        initial_state = {
+            "input": user_input,
+            "plan": [],
+            "past_steps": [],
+            "response": "",
+            "confidence_score": 1.0,
+        }
+        config: Dict[str, Any] = {
+            "configurable": {"model": model, "executor_model": executor_model}
+        }
+        if thread_id is not None:
+            config["configurable"]["thread_id"] = thread_id
 
-    return {
-        "response": final_state.get("response", "No response"),
-        "steps_executed": len(final_state.get("past_steps", [])),
-        "confidence_score": final_state.get("confidence_score", 0.0),
-        "past_steps": final_state.get("past_steps", []),
-    }
+        with span("engine.run", input=user_input, thread_id=thread_id):
+            final_state = app_graph.invoke(initial_state, config=config)
+
+        return {
+            "response": final_state.get("response", "No response"),
+            "steps_executed": len(final_state.get("past_steps", [])),
+            "confidence_score": final_state.get("confidence_score", 0.0),
+            "past_steps": final_state.get("past_steps", []),
+        }
+    except Exception as exc:  # noqa: BLE001
+        if _is_llm_unavailable_error(exc):
+            return {
+                "response": "",
+                "steps_executed": 0,
+                "confidence_score": 0.0,
+                "past_steps": [],
+                "error": (
+                    "Local LLM is unavailable. Start llama-server at the configured "
+                    "LLAMA_CPP_BASE_URL and try again."
+                ),
+            }
+        raise
+
+
+def _is_llm_unavailable_error(exc: Exception) -> bool:
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+    return any(phrase in text for phrase in _LLM_UNAVAILABLE_PHRASES)

@@ -1,6 +1,7 @@
-import json
-
 from langchain_core.prompts import ChatPromptTemplate
+
+from core.json_utils import extract_json
+
 
 def create_planner(model):
     planner_prompt = ChatPromptTemplate.from_messages([
@@ -21,21 +22,10 @@ def planner_node(state, config):
 
     response = planner.invoke({"input": state["input"]})
 
-    try:
-        # Extract content from AIMessage if needed
-        response_text = response.content if hasattr(response, 'content') else str(response)
-
-        # Find JSON in the response
-        json_start = response_text.find('{')
-        json_end = response_text.rfind('}') + 1
-        if json_start != -1 and json_end > json_start:
-            json_str = response_text[json_start:json_end]
-            data = json.loads(json_str)
-            steps = data.get("steps", [])
-        else:
-            steps = []
-    except (json.JSONDecodeError, AttributeError) as e:
-        print(f"[PLANNER ERROR] Failed to parse: {e}")
-        steps = []
+    response_text = response.content if hasattr(response, "content") else str(response)
+    data = extract_json(response_text)
+    steps = data.get("steps", []) if isinstance(data, dict) else []
+    if not steps:
+        print(f"[PLANNER] No parseable steps in model output: {response_text[:200]!r}")
 
     return {"plan": steps}
