@@ -1,0 +1,31 @@
+# Two-service local topology: the engine API + the llama.cpp model server.
+# Bring your own GGUF under ./models and point LLAMA_MODEL_FILE at it.
+services:
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    command: >
+      -m /models/${LLAMA_MODEL_FILE:-model.gguf}
+      --host 0.0.0.0 --port 8080 -c 4096
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "8080:8080"
+
+  engine:
+    build: .
+    depends_on:
+      - llama
+    environment:
+      LLAMA_CPP_BASE_URL: http://llama:8080/v1
+      LLAMA_MODEL: local-gguf
+      JOB_STORE: ${JOB_STORE:-memory}
+      CHECKPOINTER: ${CHECKPOINTER:-memory}
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+
+  # Optional: enable durable job store + checkpoints by setting JOB_STORE=redis
+  # and CHECKPOINTER=redis, then uncommenting this service.
+  # redis:
+  #   image: redis:7-alpine
+  #   ports: ["6379:6379"]

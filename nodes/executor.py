@@ -1,25 +1,39 @@
-from core.state import PlanExecuteState
+"""Executor node: runs one DAG step and resolves conflicts via real Bayesian inference."""
+
+from __future__ import annotations
+
 from bayesian_engine.bayes_engine import resolve_conflict
+from core.signals import extract_evidence, is_conflict
+from core.state import PlanExecuteState
+from core.telemetry import log_conflict_resolution, log_event
+
 
 def simple_executor(task: str) -> str:
-    """Simple mock execution engine for demonstration."""
-    if "search" in task.lower():
+    """Mock execution backend for demonstration.
+
+    In production this is where a tool/MCP call happens. The string it returns is
+    treated as an *observation* that gets mapped into ordinal evidence -- it is no
+    longer used as a magic keyword switch for the Bayesian update.
+    """
+    t = task.lower()
+    if "search" in t:
         return "search_result: Found 5 relevant documents"
-    elif "query" in task.lower():
+    if "query" in t:
         return "query_result: Retrieved 3 records with conflicting timestamps"
-    elif "validate" in task.lower():
+    if "validate" in t:
         return "validate_result: Data validation uncertain - 2 sources disagree"
-    else:
-        return f"executed: {task}"
+    return f"executed: {task}"
+
 
 def executor_node(state: PlanExecuteState, config=None) -> dict:
-    """
-    Execute the first task in the plan DAG.
-    - Pop the first task from plan
-    - Execute it and get result
-    - Check if result is ambiguous (triggers Bayesian update)
-    - Append (task, result) to past_steps
-    - Remove task from plan
+    """Execute the first task in the plan DAG.
+
+    Steps:
+      1. Pop the first task and execute it.
+      2. Map the *real* result into an ordinal evidence vector (no hardcoding).
+      3. If the observation is conflicting/ambiguous, run a Bayesian update and use
+         the posterior-predictive confidence as the step's confidence score.
+      4. Append (task, result) to past_steps and shrink the plan.
     """
     if not state.get("plan"):
         return {"response": "No tasks in plan"}
@@ -28,18 +42,16 @@ def executor_node(state: PlanExecuteState, config=None) -> dict:
     result = simple_executor(current_task)
 
     confidence = 1.0
-    if any(keyword in result.lower() for keyword in ["conflict", "uncertain", "disagree"]):
-        bayes_result = resolve_conflict({
-            "TaskStatus": 2,
-            "DataQuality": 2,
-            "ToolReliability": 3,
-        })
-        confidence = bayes_result["confidence"]
-
-    new_past_steps = [(current_task, result)]
+    if is_conflict(result):
+        evidence = extract_evidence(current_task, result).as_evidence()
+        summary = resolve_conflict(evidence)
+        confidence = summary["confidence"]
+        log_conflict_resolution(task=current_task, evidence=evidence, summary=summary)
+    else:
+        log_event("executor.step", task=current_task, result=result, confidence=confidence)
 
     return {
         "plan": state["plan"][1:],
-        "past_steps": new_past_steps,
+        "past_steps": [(current_task, result)],
         "confidence_score": confidence,
     }

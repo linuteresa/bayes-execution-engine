@@ -1,116 +1,64 @@
+"""Tests for the executor DAG node and graph routing logic."""
+
 import pytest
-import os
-from unittest.mock import MagicMock, patch
-from core.state import PlanExecuteState
-from nodes.planner import planner_node
-from nodes.executor import executor_node
-from bayesian_engine.bayes_engine import resolve_conflict
 
-def test_executor_node_basic_execution():
-    """Test that executor node correctly executes a task."""
-    state = {
-        "input": "test",
-        "plan": ["search for data"],
-        "past_steps": [],
-        "response": "",
-        "confidence_score": 1.0,
-    }
+from nodes.executor import executor_node, simple_executor
 
-    result = executor_node(state)
 
-    assert "plan" in result
-    assert "past_steps" in result
-    assert "confidence_score" in result
+def _state(plan):
+    return {"input": "test", "plan": plan, "past_steps": [], "response": "", "confidence_score": 1.0}
+
+
+def test_executor_clean_step_keeps_confidence():
+    result = executor_node(_state(["search for data"]))
+    assert result["confidence_score"] == 1.0
     assert len(result["plan"]) == 0
     assert len(result["past_steps"]) == 1
-    assert isinstance(result["confidence_score"], float)
 
-def test_executor_node_ambiguous_triggers_bayes():
-    """Test that ambiguous output triggers Bayesian conflict resolution."""
-    state = {
-        "input": "test",
-        "plan": ["query conflicting data sources"],
-        "past_steps": [],
-        "response": "",
-        "confidence_score": 1.0,
-    }
 
-    result = executor_node(state)
+def test_executor_conflict_triggers_bayes():
+    """An ambiguous observation must run the Bayesian update and lower confidence."""
+    result = executor_node(_state(["query conflicting data sources"]))
+    assert 0.0 < result["confidence_score"] < 1.0
 
-    assert result["confidence_score"] < 1.0, "Ambiguous result should lower confidence"
 
-def test_executor_node_empty_plan():
-    """Test executor behavior when plan is empty."""
-    state = {
-        "input": "test",
-        "plan": [],
-        "past_steps": [],
-        "response": "",
-        "confidence_score": 1.0,
-    }
+def test_executor_conflict_confidence_is_deterministic():
+    """The new engine is deterministic -- same conflict, same confidence."""
+    a = executor_node(_state(["query conflicting data sources"]))["confidence_score"]
+    b = executor_node(_state(["query conflicting data sources"]))["confidence_score"]
+    assert a == b
 
-    result = executor_node(state)
 
-    assert "response" in result
-    assert result["response"] == "No tasks in plan"
+def test_executor_empty_plan():
+    result = executor_node(_state([]))
+    assert result == {"response": "No tasks in plan"}
 
-def test_bayes_conflict_resolution():
-    """Test Bayesian conflict resolution produces valid output."""
-    evidence = {
-        "TaskStatus": 2,
-        "DataQuality": 1,
-        "ToolReliability": 3,
-    }
 
-    result = resolve_conflict(evidence)
+def test_executor_consumes_plan_sequentially():
+    state = _state(["step 1", "step 2", "step 3"])
+    r1 = executor_node(state)
+    assert len(r1["plan"]) == 2
+    state2 = {**state, "plan": r1["plan"], "past_steps": r1["past_steps"]}
+    r2 = executor_node(state2)
+    assert len(r2["plan"]) == 1
 
-    assert "state" in result
-    assert "confidence" in result
-    assert "distribution" in result
-    assert 0 <= result["confidence"] <= 1.0
 
-def test_planner_node_structure():
-    """Test that planner node accepts correct state structure."""
-    from core.schemas import Plan
+def test_simple_executor_routing():
+    assert "search_result" in simple_executor("search the index")
+    assert "query_result" in simple_executor("query the db")
+    assert "validate_result" in simple_executor("validate inputs")
+    assert simple_executor("do thing").startswith("executed")
 
-    state = {
-        "input": "Query the database",
-        "plan": [],
-        "past_steps": [],
-        "response": "",
-        "confidence_score": 1.0,
-    }
 
-    assert state["input"] == "Query the database"
-    assert state["plan"] == []
-    assert state["response"] == ""
+def test_graph_routing():
+    """should_continue routes correctly. Requires langgraph (skip otherwise)."""
+    pytest.importorskip("langgraph")
+    from core.graph import should_continue
 
-def test_execution_pipeline_steps():
-    """Test that executor processes tasks sequentially."""
-    initial_plan = ["step 1", "step 2", "step 3"]
-    state = {
-        "input": "test",
-        "plan": initial_plan,
-        "past_steps": [],
-        "response": "",
-        "confidence_score": 1.0,
-    }
+    assert should_continue({"response": "done", "plan": ["x"]}) == "END"
+    assert should_continue({"response": "", "plan": ["x"]}) == "executor"
+    assert should_continue({"response": "", "plan": []}) == "END"
 
-    result1 = executor_node(state)
-    assert len(result1["plan"]) == 2
-    assert len(result1["past_steps"]) == 1
-
-    state2 = {
-        "input": "test",
-        "plan": result1["plan"],
-        "past_steps": result1["past_steps"],
-        "response": "",
-        "confidence_score": result1["confidence_score"],
-    }
-
-    result2 = executor_node(state2)
-    assert len(result2["plan"]) == 1
-    assert len(result2["past_steps"]) == 1
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

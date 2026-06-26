@@ -1,5 +1,5 @@
-from typing import List, TypedDict, Annotated, Tuple
 import operator
+from typing import Annotated, List, Tuple, TypedDict
 
 class PlanExecuteState(TypedDict):
     input: str

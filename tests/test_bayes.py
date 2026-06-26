@@ -1,90 +1,137 @@
-import pytest
+"""Unit tests for the conjugate Dirichlet-Multinomial Bayesian engine."""
+
 import numpy as np
-from bayesian_engine.bayes_engine import build_bayesian_network, resolve_conflict, STATE_NAMES
+import pytest
 
-def test_bayesian_network_structure():
-    """Test that the Bayesian Network is correctly structured."""
-    model, _ = build_bayesian_network()
+from bayesian_engine.bayes_engine import (
+    N_CONTEXTS,
+    N_STATES,
+    STATE_NAMES,
+    DirichletBayesianEngine,
+    context_index,
+    context_triple,
+    resolve_conflict,
+)
 
-    assert "TaskStatus" in model.nodes()
-    assert "DataQuality" in model.nodes()
-    assert "ToolReliability" in model.nodes()
-    assert "Outcome" in model.nodes()
 
+def test_context_index_roundtrip():
+    seen = set()
+    for t in range(N_STATES):
+        for d in range(N_STATES):
+            for r in range(N_STATES):
+                idx = context_index(t, d, r)
+                seen.add(idx)
+                assert context_triple(idx) == (t, d, r)
+    assert len(seen) == N_CONTEXTS == 125
+
+
+def test_context_index_validates_range():
+    with pytest.raises(ValueError):
+        context_index(5, 0, 0)
+
+
+def test_prior_is_proper_and_normalised():
+    eng = DirichletBayesianEngine()
+    cpt = eng.cpt()
+    assert cpt.shape == (N_STATES, N_CONTEXTS)
+    # Every context column of the posterior-predictive CPT sums to 1.
+    assert np.allclose(cpt.sum(axis=0), 1.0)
+    # Proper prior: strictly positive concentration everywhere.
+    assert (eng.alpha > 0).all()
+
+
+def test_prior_is_deterministic():
+    a = DirichletBayesianEngine().alpha
+    b = DirichletBayesianEngine().alpha
+    assert np.array_equal(a, b)  # no randomness, unlike the old implementation
+
+
+def test_prior_monotonicity():
+    """Best signals -> CERTAIN; worst signals -> AMBIGUOUS."""
+    eng = DirichletBayesianEngine()
+    good = eng.resolve({"TaskStatus": 0, "DataQuality": 0, "ToolReliability": 0})
+    bad = eng.resolve({"TaskStatus": 4, "DataQuality": 4, "ToolReliability": 4})
+    assert good.state == "CERTAIN"
+    assert bad.state == "AMBIGUOUS"
+
+
+def test_expected_outcome_increases_with_degradation():
+    """The MAP outcome index should be monotonic in aggregate degradation."""
+    eng = DirichletBayesianEngine()
+    last = -1
+    for level in range(N_STATES):
+        idx = eng.resolve(
+            {"TaskStatus": level, "DataQuality": level, "ToolReliability": level}
+        ).state_index
+        assert idx >= last
+        last = idx
+
+
+def test_conjugate_update_shifts_posterior():
+    """Observing CERTAIN outcomes pulls the predictive toward CERTAIN."""
+    eng = DirichletBayesianEngine()
+    ctx = {"TaskStatus": 2, "DataQuality": 2, "ToolReliability": 2}
+    before = eng.resolve(ctx).distribution["CERTAIN"]
+    for _ in range(50):
+        eng.observe(2, 2, 2, 0)
+    after = eng.resolve(ctx).distribution["CERTAIN"]
+    assert after > before + 0.3
+
+
+def test_effective_sample_size_grows_with_data():
+    eng = DirichletBayesianEngine()
+    ctx = {"TaskStatus": 1, "DataQuality": 1, "ToolReliability": 1}
+    ess0 = eng.resolve(ctx).effective_sample_size
+    eng.fit([(1, 1, 1, 0)] * 20)
+    ess1 = eng.resolve(ctx).effective_sample_size
+    assert ess1 == pytest.approx(ess0 + 20, abs=1e-6)
+
+
+def test_reset_restores_prior():
+    eng = DirichletBayesianEngine()
+    snapshot = eng.alpha.copy()
+    eng.fit([(0, 0, 0, 4)] * 10)
+    eng.reset()
+    assert np.array_equal(eng.alpha, snapshot)
+
+
+def test_partial_evidence_marginalises():
+    """Querying with a missing parent still yields a valid distribution."""
+    eng = DirichletBayesianEngine()
+    summary = eng.resolve({"DataQuality": 4})  # TaskStatus, ToolReliability unknown
+    assert abs(sum(summary.distribution.values()) - 1.0) < 1e-9
+    assert summary.state in STATE_NAMES.values()
+
+
+def test_credible_interval_brackets_confidence():
+    eng = DirichletBayesianEngine()
+    s = eng.resolve({"TaskStatus": 0, "DataQuality": 0, "ToolReliability": 0})
+    assert 0.0 <= s.credible_low <= s.confidence <= s.credible_high <= 1.0
+
+
+def test_resolve_conflict_backwards_compatible_keys():
+    out = resolve_conflict({"TaskStatus": 2, "DataQuality": 1, "ToolReliability": 3})
+    for key in ("state", "state_index", "confidence", "distribution"):
+        assert key in out
+    assert 0.0 <= out["confidence"] <= 1.0
+    assert abs(sum(out["distribution"].values()) - 1.0) < 1e-9
+
+
+def test_invalid_outcome_rejected():
+    eng = DirichletBayesianEngine()
+    with pytest.raises(ValueError):
+        eng.observe(0, 0, 0, 5)
+
+
+def test_pgmpy_network_optional():
+    """If pgmpy is installed, the equivalent network must validate."""
+    pytest.importorskip("pgmpy")
+    eng = DirichletBayesianEngine()
+    model = eng.build_network()
     assert model.check_model()
+    cpd = model.get_cpds("Outcome")
+    assert cpd.values.size == N_STATES * N_CONTEXTS  # 625
 
-def test_cpt_outcome_shape():
-    """
-    Verify the Outcome CPT covers exactly 125 parent combinations.
-    3 parent variables × 5 states each = 5^3 = 125 parent combinations.
-    pgmpy stores as (5, 5, 5, 5) where first dim is outcome, rest are parent states.
-    """
-    model, cpd_outcome = build_bayesian_network()
-
-    expected_shape = (5, 5, 5, 5)
-    assert cpd_outcome.values.shape == expected_shape, (
-        f"Expected CPT shape {expected_shape}, got {cpd_outcome.values.shape}"
-    )
-
-    assert cpd_outcome.values.size == 625, (
-        f"Expected 625 total probability values (5 outcome × 125 parent combos), got {cpd_outcome.values.size}"
-    )
-
-def test_cpt_normalization():
-    """Verify CPT values for each parent state combination sum to 1.0."""
-    model, cpd_outcome = build_bayesian_network()
-
-    for i in range(5):
-        for j in range(5):
-            for k in range(5):
-                col_sum = cpd_outcome.values[:, i, j, k].sum()
-                assert abs(col_sum - 1.0) < 1e-6, (
-                    f"CPT column [{i},{j},{k}] sums to {col_sum}, not 1.0"
-                )
-
-def test_state_names_mapping():
-    """Verify semantic state names are correctly defined."""
-    expected = {
-        0: "CERTAIN",
-        1: "HIGH",
-        2: "MEDIUM",
-        3: "LOW",
-        4: "AMBIGUOUS",
-    }
-    assert STATE_NAMES == expected
-
-def test_resolve_conflict_basic():
-    """Test the resolve_conflict function with valid evidence."""
-    result = resolve_conflict({
-        "TaskStatus": 2,
-        "DataQuality": 2,
-        "ToolReliability": 3,
-    })
-
-    assert "state" in result
-    assert "state_index" in result
-    assert "confidence" in result
-    assert "distribution" in result
-
-    assert result["state"] in STATE_NAMES.values()
-    assert 0 <= result["confidence"] <= 1.0
-    assert result["state_index"] in range(5)
-
-    distribution = result["distribution"]
-    total_prob = sum(distribution.values())
-    assert abs(total_prob - 1.0) < 1e-6
-
-def test_resolve_conflict_all_states():
-    """Verify resolve_conflict works for all possible parent state combinations."""
-    test_cases = [
-        {"TaskStatus": 0, "DataQuality": 0, "ToolReliability": 0},
-        {"TaskStatus": 2, "DataQuality": 3, "ToolReliability": 1},
-        {"TaskStatus": 4, "DataQuality": 4, "ToolReliability": 4},
-    ]
-
-    for evidence in test_cases:
-        result = resolve_conflict(evidence)
-        assert 0 <= result["confidence"] <= 1.0
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

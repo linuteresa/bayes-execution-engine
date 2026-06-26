@@ -1,0 +1,18 @@
+[project]
+name = "bayes-execution-engine"
+version = "1.0.0"
+description = "Plan-and-Execute agent orchestration with a conjugate Bayesian conflict resolver, served over an async API. Local LLM inference via llama.cpp."
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["_verify", "_verify2"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]  # pycodestyle, pyflakes, isort, bugbear
+ignore = ["E501"]  # long docstrings/tables allowed
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

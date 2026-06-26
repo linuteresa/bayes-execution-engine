@@ -1,6 +1,6 @@
 import json
+
 from langchain_core.prompts import ChatPromptTemplate
-from core.schemas import Plan
 
 def create_planner(model):
     planner_prompt = ChatPromptTemplate.from_messages([

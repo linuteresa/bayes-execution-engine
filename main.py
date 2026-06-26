@@ -1,91 +1,37 @@
-import os
-from typing import Literal
-from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, START, END
+"""CLI entrypoint for the Bayes Execution Engine."""
 
-from core.state import PlanExecuteState
-from nodes.planner import planner_node
-from nodes.executor import executor_node
-from nodes.replanner import replanner_node
+from __future__ import annotations
+
+import sys
+
+from dotenv import load_dotenv
+
+from core.graph import run_execution_engine
 
 load_dotenv()
 
-def should_continue(state: PlanExecuteState) -> Literal["executor", "END"]:
-    """Route to executor if plan remains, otherwise finish."""
-    if state.get("response"):
-        return "END"
-    if state.get("plan"):
-        return "executor"
-    return "END"
 
-def build_graph():
-    """Build the LangGraph StateGraph for Plan-and-Execute."""
-    workflow = StateGraph(PlanExecuteState)
-
-    workflow.add_node("planner", planner_node)
-    workflow.add_node("executor", executor_node)
-    workflow.add_node("replanner", replanner_node)
-
-    workflow.add_edge(START, "planner")
-    workflow.add_edge("planner", "executor")
-    workflow.add_edge("executor", "replanner")
-
-    workflow.add_conditional_edges(
-        "replanner",
-        should_continue,
-        {"executor": "executor", "END": END},
-    )
-
-    return workflow.compile()
-
-def run_execution_engine(user_input: str):
-    """Run the complete Plan-and-Execute orchestration."""
-    base_url = os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:8080/v1")
-
-    model = ChatOpenAI(
-        model="gpt-3.5-turbo",  # Model name doesn't matter for local server
-        base_url=base_url,
-        api_key="not-needed",  # Local server doesn't require auth
-        temperature=0,
-    )
-
-    app = build_graph()
-
-    initial_state = {
-        "input": user_input,
-        "plan": [],
-        "past_steps": [],
-        "response": "",
-        "confidence_score": 1.0,
-    }
-
+def main(user_input: str) -> None:
     print("\n" + "=" * 60)
     print("BAYES EXECUTION ENGINE")
     print("=" * 60)
     print(f"Input: {user_input}\n")
 
-    final_state = app.invoke(
-        initial_state,
-        config={"configurable": {"model": model}},
-    )
+    result = run_execution_engine(user_input)
 
     print("\n" + "=" * 60)
     print("EXECUTION COMPLETE")
     print("=" * 60)
-    print(f"Final Response: {final_state.get('response', 'No response')}")
-    print(f"Steps Executed: {len(final_state.get('past_steps', []))}")
-    print(f"Confidence Score: {final_state.get('confidence_score', 0.0):.2f}")
+    print(f"Final Response: {result['response']}")
+    print(f"Steps Executed: {result['steps_executed']}")
+    print(f"Confidence Score: {result['confidence_score']:.2f}")
     print()
 
-    return final_state
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1:
-        user_input = " ".join(sys.argv[1:])
-    else:
-        user_input = "What are the active users in the system and which high-priority tasks are assigned?"
-
-    run_execution_engine(user_input)
+    prompt = (
+        " ".join(sys.argv[1:])
+        if len(sys.argv) > 1
+        else "What are the active users in the system and which high-priority tasks are assigned?"
+    )
+    main(prompt)
