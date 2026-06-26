@@ -1,20 +1,8 @@
 # Quickstart: Run & Verify
 
-This guide gets the engine running and more importantly, shows how to **prove the
-Bayesian core works without any model running**, since that logic is fully deterministic.
-
-## Prerequisites
-
-- Python 3.10+
-- Docker (for the local LLM) — or any llama.cpp `llama-server` install
-- A GGUF model from Hugging Face
-
----
+The Bayesian core is deterministic, so you can prove it works with **no model running**.
 
 ## 1. Start the local model
-
-The engine talks to llama.cpp's OpenAI-compatible server at `http://localhost:8080/v1`.
-Start it with your usual command (nothing here contacts a cloud LLM):
 
 ```powershell
 docker run --rm -it -e LLAMA_CACHE=/models -p 127.0.0.1:8080:8080 -v C:\llama_models:/models ^
@@ -22,176 +10,48 @@ docker run --rm -it -e LLAMA_CACHE=/models -p 127.0.0.1:8080:8080 -v C:\llama_mo
   --host 0.0.0.0 --port 8080 -c 8192
 ```
 
-Leave this running in its own terminal. The app's default `LLAMA_CPP_BASE_URL` already
-matches this address, so no extra configuration is required.
+The app defaults to `http://localhost:8080/v1`, so no extra config.
 
----
-
-## 2. Install & run the engine (second terminal)
+## 2. Run
 
 ```powershell
-cd C:\Users\lAntEr\Desktop\bayes-execution-engine
 pip install -r requirements.txt
+python main.py "Compare REST and gRPC and when to use each."   # CLI
+python app.py                                                  # web UI :5000
+uvicorn service.api:app --port 8000                            # async API
 ```
 
-Three ways to run it:
+Async API: `POST /jobs {question}` → `{job_id}` → poll `GET /jobs/{job_id}`.
+
+## 3. Verify without a model (the real proof)
 
 ```powershell
-# (a) CLI
-python main.py "Which high-priority tasks are assigned and to whom?"
+pytest                                                          # 60 passed (or 58 + 2 skipped)
 
-# (b) Simple web UI
-python app.py                      # http://127.0.0.1:5000
+python demo.py --sim                                            # confident vs ambiguous, side by side
 
-# (c) Async submit/poll API 
-uvicorn service.api:app --port 8000
+python -c "from bayesian_engine.bayes_engine import resolve_conflict; import json; print(json.dumps(resolve_conflict({'TaskStatus':4,'DataQuality':4,'ToolReliability':4})))"
 ```
 
-For the async API (third terminal):
+Expected from the one-liner: `state AMBIGUOUS`, `confidence ≈ 0.43`, plus a credible interval
+and effective sample size. Run it twice — **identical** (the v0 code returned random numbers;
+making it deterministic and data-driven is the headline fix). All-zeros evidence ⇒ `CERTAIN`.
 
-```powershell
-curl -X POST localhost:8000/jobs -H "content-type: application/json" -d "{\"question\":\"list active users\"}"
-# -> {"job_id":"<id>","status":"queued"}
+`python scaling/latent_bayes.py` → 390,625 naive states compress to 125 (`3,125×`), latent
+accuracy 0.64 vs 0.22 baseline.
 
-curl localhost:8000/jobs/<id>
-# -> {"status":"done","result":{...}}
-```
+## 4. A full run
 
-Or bring up model + engine together: `docker compose up` (see `docker-compose.yml`).
-
-> **Note:** the executor is a *mock* standing in for real enterprise tools (DB queries,
-> API calls). It does not ask the model to answer your question directly — see the README
-> "How It Works" section. Use the deterministic checks below to verify the engine.
-
----
-
-## 3. Verify 
-
-The Bayesian engine is deterministic, so its correctness can be demonstrated with zero
-LLM involvement.
-
-### 3a. Run the test suite
-
-```powershell
-pytest
-```
-
-**Expected:** `40 passed` — or `38 passed, 2 skipped` if `pgmpy` / `langgraph` aren't
-installed (those two tests auto-skip via `importorskip`).
-
-### 3b. Prove the engine is real Bayesian inference, not randomness
-
-```powershell
-python -c "from bayesian_engine.bayes_engine import resolve_conflict; import json; print(json.dumps(resolve_conflict({'TaskStatus':4,'DataQuality':4,'ToolReliability':4}), indent=2))"
-```
-
-**Expected** (degraded signals → confident *low* outcome, with calibrated uncertainty):
-
-```json
-{
-  "state": "AMBIGUOUS",
-  "state_index": 4,
-  "confidence": 0.428,
-  "distribution": {"CERTAIN": 0.077, "HIGH": 0.081, "MEDIUM": 0.124, "LOW": 0.290, "AMBIGUOUS": 0.428},
-  "credible_interval": [0.18, 0.69],
-  "effective_sample_size": 13.0
-}
-```
-
-Run it **twice — the numbers are identical.** Flip the evidence to all-zeros
-(`{'TaskStatus':0,'DataQuality':0,'ToolReliability':0}`) and it resolves to `CERTAIN`.
-
-Watch the posterior move with data (conjugate update):
-
-```powershell
-python -c "from bayesian_engine.bayes_engine import DirichletBayesianEngine as E; e=E(); ctx={'TaskStatus':2,'DataQuality':2,'ToolReliability':2}; b=e.resolve(ctx).distribution['CERTAIN']; [e.observe(2,2,2,0) for _ in range(50)]; print('P(CERTAIN) before/after 50 obs:', round(b,3), '->', round(e.resolve(ctx).distribution['CERTAIN'],3))"
-```
-
-**Expected:** `P(CERTAIN) before/after 50 obs: 0.11 -> 0.816`
-
-### 3c. Prove the 10,000-state scaling story
-
-```powershell
-python scaling/latent_bayes.py
-```
-
-**Expected:**
-
-```json
-{
-  "raw_dim": 8,
-  "naive_raw_states": 390625,
-  "latent_states": 125,
-  "compression_ratio": 3125.0,
-  "explained_variance": 0.891,
-  "test_accuracy": 0.636,
-  "majority_baseline": 0.216
-}
-```
-
-The key line: a classifier built on the **125-state latent grid** scores **0.636** vs a
-**0.216** majority baseline — PCA collapsed 390,625 naive states to 125 while keeping the
-decision-relevant signal.
-
----
-
-## 4. What a full end-to-end run looks like
-
-`python main.py "..."` runs Planner (LLM) → Executor → Replanner (LLM). The executor
-runs each step by sampling your model several times and measuring how much the samples
-agree (see [docs/EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)), so the answer is real and
-the confidence is earned:
-
-```
-============================================================
-EXECUTION COMPLETE
-============================================================
-Final Response: <natural-language answer synthesised from the executed steps>
-Steps Executed: 3
-Confidence Score: 0.78
-```
-
-What to expect:
-
-- **Real answers.** Each step is executed by the model; the consensus (medoid) answer
-  flows to the replanner, which synthesizes the final response. This is no longer a mock.
-- **Confidence is measured, not faked.** `Confidence Score` is the posterior probability
-  the step outputs are high quality, derived from how consistently the model answered. Ask
-  it something the model is solid on → high confidence; ask something ambiguous or beyond
-  the model → the samples scatter, the Bayesian engine flags a conflict, and confidence
-  drops, with a `bayes.conflict_resolved` log line showing the evidence matrix.
-- **It costs N× tokens per step** (default 4 samples). Tune with `EXECUTOR_SAMPLES` and
-  `EXECUTOR_TEMPERATURE`. Set `EXECUTOR_SAMPLES=1` to disable self-consistency (fastest,
-  but you lose the agreement signal).
-- If a small model returns malformed planner JSON, the hardened parser still extracts it
-  in most cases; in the worst case the replanner surfaces the gathered step results rather
-  than failing silently.
-
----
-
-## 5. Observability
-
-Logs are structured JSON (see `core/telemetry.py`). To get more detail:
-
-```powershell
-set LOG_LEVEL=DEBUG       # PowerShell:  $env:LOG_LEVEL="DEBUG"
-```
-
-Conflict-resolution events look like:
-
-```json
-{"event": "bayes.conflict_resolved", "confidence": 0.31,
- "evidence": {"TaskStatus": 3, "DataQuality": 4, "ToolReliability": 0},
- "credible_interval": [0.19, 0.45], "effective_sample_size": 13.0}
-```
-
----
+`python main.py "..."` runs Planner → Executor (samples the model and measures agreement) →
+Replanner, then prints the final answer, steps executed, and a confidence score. Confidence is
+earned: consistent answers score high; ambiguous prompts scatter, log a `bayes.conflict_resolved`
+event, and score low. Costs ~`EXECUTOR_SAMPLES`× tokens per step.
 
 ## Troubleshooting
 
-| Symptom | Cause / fix |
+| Symptom | Fix |
 |---|---|
-| `Connection refused` to `:8080` | The llama.cpp container in step 1 isn't running. |
-| `Steps Executed: 0` | The model returned non-JSON to the planner; try a larger GGUF or rerun. Engine logic is unaffected (verify via section 3). |
-| `pytest` shows 2 skipped | Optional `pgmpy` / `langgraph` not installed — expected; install them to run all 40. |
-| Want durable state | Set `JOB_STORE=redis` and `CHECKPOINTER=redis` (see `.env.example`). |
+| `Connection refused :8080` | The model container (step 1) isn't running. |
+| `Steps Executed: 0` | Model returned malformed planner JSON; the parser recovers in most cases — retry or use a larger GGUF. Engine logic is fine (verify via §3). |
+| `pytest` shows 2 skipped | Optional `pgmpy`/`langgraph` not installed — expected. |
+| Want durable state | `JOB_STORE=redis`, `CHECKPOINTER=redis` (see `.env.example`). |
