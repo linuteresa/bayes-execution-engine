@@ -59,5 +59,5 @@ suite reproducible.
 ## Limitations
 
 Lexical agreement can miss paraphrases (embeddings fix this); N samples cost N× tokens; and
-self-consistency measures *internal* consistency, not factual truth — a confidence signal,
+self-consistency measures *internal* consistency, not factual truth, which is a confidence signal,
 not an oracle.

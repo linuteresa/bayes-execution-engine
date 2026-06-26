@@ -6,7 +6,7 @@ served behind an **async API**, running entirely on a **local LLM** via
 
 Standard agents "guess again" on conflicting data and loop or hallucinate. This engine
 decouples *planning* from *doing*, and gates each step's confidence on a **real Bayesian
-update** driven by how consistently the model answers — calibrated uncertainty, not a vibe.
+update** driven by how consistently the model answers, calibrated uncertainty, not a vibe.
 
 ---
 
@@ -101,11 +101,11 @@ Full walkthrough with expected outputs in **[QUICKSTART.md](QUICKSTART.md)**. Lo
 `ChatOpenAI` just talks to `llama-server`'s OpenAI-compatible endpoint; nothing leaves the box.
 
 ```bash
-llama-server -m ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080   # 1. local model
-pip install -r requirements.txt                                        # 2. install
-python main.py "Compare REST and gRPC and when to use each."           # 3a. CLI
-python app.py                                                          # 3b. web UI :5000
-uvicorn service.api:app --port 8000                                    # 3c. async API
+llama-server -m ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080  
+pip install -r requirements.txt                                        
+python main.py "Compare REST and gRPC and when to use each."           
+python app.py                                                         
+uvicorn service.api:app --port 8000                                  
 ```
 
 Or `docker compose up` (engine + model server). Config via env vars (`.env`):

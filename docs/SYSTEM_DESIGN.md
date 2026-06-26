@@ -37,7 +37,7 @@ External, keyed state ⇒ N workers serve M sessions with no shared mutable memo
 data) or a tool's `ToolReliability` collapse (failing schema); track p95 latency and posterior
 ESS.
 
-## 5. CI/CD & containerisation **[implemented]**
+## 5. CI/CD & containerization **[implemented]**
 
 `Dockerfile` (slim, non-root, healthcheck; GGUF weights run in a *separate* `llama-server`
 container per `docker-compose.yml`). GitHub Actions: ruff → pytest (3.10/3.11/3.12) → image build.

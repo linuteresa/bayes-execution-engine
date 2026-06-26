@@ -2,6 +2,7 @@ from typing import List, Union
 
 from pydantic import BaseModel, Field
 
+
 class Plan(BaseModel):
     steps: List[str] = Field(..., description="Different steps to follow, should be in sorted order")
 
