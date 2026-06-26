@@ -44,7 +44,6 @@ from typing import Dict, Iterable, Optional, Tuple
 
 import numpy as np
 
-
 STATE_NAMES: Dict[int, str] = {0: "CERTAIN", 1: "HIGH", 2: "MEDIUM", 3: "LOW", 4: "AMBIGUOUS"}
 STATE_MAP: Dict[str, int] = {v: k for k, v in STATE_NAMES.items()}
 

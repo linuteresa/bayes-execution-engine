@@ -19,7 +19,6 @@ from core.state import PlanExecuteState
 from core.telemetry import log_conflict_resolution, log_event
 from nodes.llm_executor import execute_step_with_llm
 
-
 _CONFLICT_STATE_INDEX = 2
 
 
