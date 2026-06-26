@@ -7,7 +7,7 @@ For production / long-running LLM calls use the async FastAPI service in
 from __future__ import annotations
 
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, jsonify, render_template, request
 
 from core.graph import run_execution_engine
 
