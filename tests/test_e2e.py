@@ -10,11 +10,42 @@ def _state(plan):
     return {"input": "test", "plan": plan, "past_steps": [], "response": "", "confidence_score": 1.0}
 
 
-def test_executor_clean_step_keeps_confidence():
+def test_executor_clean_step_is_high_confidence():
+    """A stable mock tool agrees with itself, so the posterior lands on a good outcome.
+
+    Not 1.0: confidence is now P(CERTAIN)+P(HIGH) from the posterior on *measured*
+    agreement, so even a perfectly consistent step keeps the prior's residual doubt.
+    """
     result = executor_node(_state(["summarize data"]))
-    assert result["confidence_score"] == 1.0
+    assert result["confidence_score"] > 0.6
     assert len(result["plan"]) == 0
     assert len(result["past_steps"]) == 1
+
+
+def test_stable_tool_beats_flaky_tool_on_confidence():
+    """The whole point of one evidence path: disagreement, not keywords, lowers confidence."""
+    stable = executor_node(_state(["summarize data"]))["confidence_score"]
+    flaky = executor_node(_state(["query conflicting data sources"]))["confidence_score"]
+    assert flaky < stable
+
+
+def test_executor_evidence_defaults_to_self_consistency(monkeypatch):
+    """The keyword extractor must not be on the default path."""
+    monkeypatch.delenv("EXECUTOR_EVIDENCE", raising=False)
+    import core.signals
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("keyword extractor must not run by default")
+
+    monkeypatch.setattr(core.signals, "extract_evidence", _boom)
+    executor_node(_state(["query conflicting data sources"]))
+
+
+def test_keyword_evidence_is_opt_in(monkeypatch):
+    """...but stays reachable for no-sampling deployments when asked for explicitly."""
+    monkeypatch.setenv("EXECUTOR_EVIDENCE", "keywords")
+    result = executor_node(_state(["query conflicting data sources"]))
+    assert 0.0 < result["confidence_score"] < 1.0
 
 
 def test_executor_conflict_triggers_bayes():
@@ -49,6 +80,20 @@ def test_simple_executor_routing():
     assert "query_result" in simple_executor("query the db")
     assert "validate_result" in simple_executor("validate inputs")
     assert simple_executor("do thing").startswith("executed")
+
+
+def test_mock_tool_sampler_is_deterministic_but_divergent():
+    """A flaky mock tool must actually return different readings across samples."""
+    from nodes.executor import _MockToolSampler
+
+    a = [_MockToolSampler("query the db").invoke("") for _ in range(1)]
+    sampler = _MockToolSampler("query the db")
+    readings = {sampler.invoke("") for _ in range(4)}
+    assert len(readings) > 1                      # genuine disagreement to measure
+    assert a[0] == _MockToolSampler("query the db").invoke("")  # reproducible
+
+    stable = _MockToolSampler("summarize data")
+    assert len({stable.invoke("") for _ in range(4)}) == 1
 
 
 def test_replanner_filters_completed_and_duplicate_steps():

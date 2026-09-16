@@ -52,9 +52,27 @@ behaviour** and gates confidence on a principled fusion of three signals.
 |---|---|---|
 | `EXECUTOR_SAMPLES` | 4 | samples per step (1 disables self-consistency) |
 | `EXECUTOR_TEMPERATURE` | 0.7 | sampling temperature |
+| `EXECUTOR_EVIDENCE` | `self-consistency` | `keywords` opts into the legacy extractor |
 
-With no model (tests/offline) the executor uses a deterministic keyword mock, keeping the
-suite reproducible.
+**One evidence path.** With no model the executor swaps the backend, not the measurement:
+`_MockToolSampler` is a deterministic *fake tool* whose scripted readings sometimes
+disagree, and those samples go through the same agreement computation a live model's would.
+So the offline suite exercises the real machinery and stays reproducible.
+
+The repo used to derive offline evidence by keyword-matching the result text, which
+contradicted the claim above — two notions of "evidence", only one of them measured. That
+extractor now lives in `core/signals.py` as an explicit opt-in
+(`EXECUTOR_EVIDENCE=keywords`) for deployments with no sampling budget, where a single-shot
+tool returns text and there is no disagreement to measure. It is never the default, and
+`tests/test_e2e.py::test_executor_evidence_defaults_to_self_consistency` fails if it ever
+becomes one.
+
+## Does any of this actually work?
+
+Self-consistency is a *proxy* for correctness, not a proof of it, so the claim is tested
+rather than asserted: `eval/` scores these confidences against gold answers with reliability
+diagrams, ECE, AUROC and risk-coverage, against baselines including raw agreement with no
+Bayesian layer at all. See [CALIBRATION.md](CALIBRATION.md).
 
 ## Limitations
 

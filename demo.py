@@ -19,17 +19,11 @@ from __future__ import annotations
 import random
 import sys
 
-from bayesian_engine.bayes_engine import resolve_conflict
+from bayesian_engine.bayes_engine import good_probability, resolve_conflict
 from nodes.llm_executor import execute_step_with_llm
 
 CONFIDENT_PROMPT = "What is the capital of France?"
 AMBIGUOUS_PROMPT = "What will the exact price of Bitcoin be next Tuesday?"
-
-
-def good_probability(summary: dict) -> float:
-    """Confidence = posterior probability the answer is high quality: P(CERTAIN)+P(HIGH)."""
-    dist = summary["distribution"]
-    return dist["CERTAIN"] + dist["HIGH"]
 
 
 # --------------------------------------------------------------------------- live
