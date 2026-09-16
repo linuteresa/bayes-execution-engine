@@ -153,6 +153,25 @@ class DirichletBayesianEngine:
         """Discard observed data, returning to the pure prior."""
         self.alpha = self._prior.copy()
 
+    # ----------------------------------------------------------- introspection
+    def observation_counts(self) -> np.ndarray:
+        """Observed counts only, shape ``(125, 5)``: ``alpha_posterior - alpha_prior``.
+
+        Conjugacy makes this exact rather than an estimate -- the prior contributes a
+        fixed pseudo-count, so subtracting it recovers the real data. Useful for
+        answering the question that decides whether a 125-cell table is the right
+        size: how many contexts has this deployment *ever* visited?
+        """
+        return self.alpha - self._prior
+
+    def coverage(self) -> int:
+        """How many of the 125 contexts have at least one real observation."""
+        return int((self.observation_counts().sum(axis=1) > 0).sum())
+
+    def total_observations(self) -> float:
+        """Total real observations across all contexts."""
+        return float(self.observation_counts().sum())
+
     # --------------------------------------------------------- predictive CPT
     def cpt(self) -> np.ndarray:
         """Posterior-predictive CPT, shape ``(5_outcome, 125_context)``.
