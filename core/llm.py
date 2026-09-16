@@ -16,15 +16,25 @@ import os
 from langchain_openai import ChatOpenAI
 
 
-def build_llm(temperature: float = 0.0) -> ChatOpenAI:
-    """Return a chat client wired to the local llama.cpp server."""
+def build_llm(temperature: float = 0.0, *, logprobs: bool = False) -> ChatOpenAI:
+    """Return a chat client wired to the local llama.cpp server.
+
+    Set ``logprobs=True`` to ask the server for per-token logprobs. The calibration
+    eval uses them for its mean-token-logprob baseline (``eval/answerers.py``); the
+    agent path leaves them off since nothing downstream reads them. Not every
+    llama-server build honours the flag, so callers must tolerate their absence.
+    """
     base_url = os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:8080/v1")
     # llama-server ignores the model field and serves whatever GGUF was loaded; we
     # pass the configured name purely for clearer logs/traces.
     model_name = os.getenv("LLAMA_MODEL", "local-gguf")
+    kwargs = {}
+    if logprobs:
+        kwargs["logprobs"] = True
     return ChatOpenAI(
         model=model_name,
         base_url=base_url,
         api_key=os.getenv("LLAMA_CPP_API_KEY", "not-needed"),  # local server: auth disabled
         temperature=temperature,
+        **kwargs,
     )

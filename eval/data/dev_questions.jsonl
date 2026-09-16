@@ -1,0 +1,80 @@
+{"id": "fact-001", "question": "What is the capital of France?", "answers": ["Paris"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-002", "question": "What is the chemical symbol for gold?", "answers": ["Au"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-003", "question": "How many continents are there on Earth?", "answers": ["seven", "7"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-004", "question": "What is the largest planet in our solar system?", "answers": ["Jupiter"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-005", "question": "Who wrote the play Romeo and Juliet?", "answers": ["Shakespeare", "William Shakespeare"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-006", "question": "What is the boiling point of water at sea level in degrees Celsius?", "answers": ["100"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-007", "question": "What is the capital of Japan?", "answers": ["Tokyo"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-008", "question": "How many sides does a hexagon have?", "answers": ["six", "6"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-009", "question": "Which gas do plants absorb from the atmosphere during photosynthesis?", "answers": ["carbon dioxide", "CO2"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-010", "question": "What is the largest ocean on Earth?", "answers": ["Pacific", "Pacific Ocean"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-011", "question": "What is the chemical symbol for sodium?", "answers": ["Na"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-012", "question": "Who painted the Mona Lisa?", "answers": ["Leonardo da Vinci", "da Vinci", "Leonardo"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-013", "question": "What is the square root of 144?", "answers": ["12", "twelve"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-014", "question": "What is the capital of Australia?", "answers": ["Canberra"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-015", "question": "How many players from one team are on the field in a football (soccer) match?", "answers": ["eleven", "11"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-016", "question": "What is the official currency of the United Kingdom?", "answers": ["pound sterling", "pound", "sterling", "GBP"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-017", "question": "Which planet is known as the Red Planet?", "answers": ["Mars"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-018", "question": "How many bones are in the adult human body?", "answers": ["206"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-019", "question": "What is the fastest land animal?", "answers": ["cheetah"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-020", "question": "What substance has the chemical formula H2O?", "answers": ["water"], "grader": "contains", "difficulty": "easy", "source": "bundled-dev"}
+{"id": "fact-021", "question": "Who developed the theory of general relativity?", "answers": ["Einstein", "Albert Einstein"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-022", "question": "In what year did the Berlin Wall fall?", "answers": ["1989"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-023", "question": "What is the capital of Canada?", "answers": ["Ottawa"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-024", "question": "What is the longest river in Africa?", "answers": ["Nile", "Nile River"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-025", "question": "Who wrote the novel Nineteen Eighty-Four?", "answers": ["George Orwell", "Orwell", "Eric Blair"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-026", "question": "Which chemical element has atomic number 6?", "answers": ["carbon"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-027", "question": "In what year did the Second World War end?", "answers": ["1945"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-028", "question": "What is the largest mammal on Earth?", "answers": ["blue whale"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-029", "question": "Who was the first person to walk on the Moon?", "answers": ["Neil Armstrong", "Armstrong"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-030", "question": "What is the capital of Brazil?", "answers": ["Brasilia", "Brasilia DF"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-031", "question": "What is the chemical formula for table salt?", "answers": ["NaCl", "sodium chloride"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-032", "question": "How many strings does a standard violin have?", "answers": ["four", "4"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-033", "question": "What is the hardest naturally occurring substance?", "answers": ["diamond"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-034", "question": "Who discovered penicillin?", "answers": ["Alexander Fleming", "Fleming"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-035", "question": "What is the smallest prime number?", "answers": ["2", "two"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-036", "question": "In which country is Mount Kilimanjaro located?", "answers": ["Tanzania"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-037", "question": "Which language has the most native speakers worldwide?", "answers": ["Mandarin", "Mandarin Chinese", "Chinese"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-038", "question": "What is the capital of Egypt?", "answers": ["Cairo"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-039", "question": "Who composed the Ninth Symphony that contains the Ode to Joy?", "answers": ["Beethoven", "Ludwig van Beethoven"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-040", "question": "Which organelle is known as the powerhouse of the cell?", "answers": ["mitochondria", "mitochondrion"], "grader": "contains", "difficulty": "medium", "source": "bundled-dev"}
+{"id": "fact-041", "question": "What is the atomic number of tungsten?", "answers": ["74"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-042", "question": "In what year was the Peace of Westphalia signed?", "answers": ["1648"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-043", "question": "Who was the 13th President of the United States?", "answers": ["Millard Fillmore", "Fillmore"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-044", "question": "What is the capital of Bhutan?", "answers": ["Thimphu"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-045", "question": "What is the SI unit of magnetic flux?", "answers": ["weber", "Wb"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-046", "question": "Who wrote The Tale of Genji?", "answers": ["Murasaki Shikibu", "Shikibu", "Lady Murasaki"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-047", "question": "What is the deepest known point in the ocean?", "answers": ["Challenger Deep"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-048", "question": "In what year did the Chernobyl nuclear disaster occur?", "answers": ["1986"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-049", "question": "What is the currency of Vietnam?", "answers": ["dong", "Vietnamese dong", "VND"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-050", "question": "Who won the Nobel Prize in Literature in 1954?", "answers": ["Ernest Hemingway", "Hemingway"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-051", "question": "What is the longest bone in the human body?", "answers": ["femur", "thigh bone"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-052", "question": "What is the capital of Kazakhstan?", "answers": ["Astana", "Nur-Sultan"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-053", "question": "What is the chemical symbol for antimony?", "answers": ["Sb"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-054", "question": "Who painted The Persistence of Memory?", "answers": ["Salvador Dali", "Dali"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-055", "question": "What is the largest moon of Saturn?", "answers": ["Titan"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-056", "question": "What is the highest mountain in Japan?", "answers": ["Mount Fuji", "Fuji", "Fujisan"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-057", "question": "Who formulated the uncertainty principle in quantum mechanics?", "answers": ["Werner Heisenberg", "Heisenberg"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-058", "question": "What is the capital of Mongolia?", "answers": ["Ulaanbaatar", "Ulan Bator"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-059", "question": "What is the most abundant gas in Earth's atmosphere?", "answers": ["nitrogen", "N2"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "fact-060", "question": "Which Roman emperor made his horse a senator, according to legend?", "answers": ["Caligula"], "grader": "contains", "difficulty": "hard", "source": "bundled-dev"}
+{"id": "math-001", "question": "A train travels at a constant 60 km/h for 2.5 hours. How many kilometres does it cover?", "answers": ["150"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-002", "question": "Pencils cost $0.45 each. What is the total cost of 12 pencils, in dollars?", "answers": ["5.4"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-003", "question": "Natalia sold clips to 48 friends in April, then sold half as many clips in May. How many clips did she sell altogether?", "answers": ["72"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-004", "question": "A rectangle measures 7 cm by 9 cm. What is its area in square centimetres?", "answers": ["63"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-005", "question": "What is 15% of 240?", "answers": ["36"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-006", "question": "If 3x + 7 = 28, what is the value of x?", "answers": ["7"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-007", "question": "A book has 320 pages. If you have read 40% of it, how many pages have you read?", "answers": ["128"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-008", "question": "What is the sum of the first 10 positive integers?", "answers": ["55"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-009", "question": "A car consumes 8 litres of fuel per 100 km. How many litres does it need for a 250 km trip?", "answers": ["20"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-010", "question": "How many individual eggs are there in twelve dozen eggs?", "answers": ["144"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-011", "question": "A worker earns $18 per hour and works 37.5 hours in a week. What is the gross weekly pay in dollars?", "answers": ["675"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-012", "question": "What is 2 raised to the power of 10?", "answers": ["1024"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-013", "question": "A recipe calls for 3/4 of a cup of sugar per batch. How many cups are needed for 4 batches?", "answers": ["3"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-014", "question": "A store discounts an $80 item by 25%. What is the final price in dollars?", "answers": ["60"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-015", "question": "A tank holds 450 litres when full and is currently two-thirds full. How many litres are in it?", "answers": ["300"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-016", "question": "A 24 metre rope is cut into 8 equal pieces. How long is each piece in metres?", "answers": ["3"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-017", "question": "What is the simple interest on $2000 at 5% per year for 3 years, in dollars?", "answers": ["300"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-018", "question": "Two angles of a triangle measure 45 and 65 degrees. What is the third angle in degrees?", "answers": ["70"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-019", "question": "If 7 workers build a wall in 12 days, how many days would 14 workers of equal speed take?", "answers": ["6"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}
+{"id": "math-020", "question": "A shirt costs $25 before an 8% sales tax. What is the total cost in dollars?", "answers": ["27"], "grader": "numeric", "difficulty": "arithmetic", "source": "bundled-dev"}

@@ -53,6 +53,11 @@ class ExecutionResult:
     evidence: dict[str, int]
     consistency: float
     samples: list[str] = field(default_factory=list)
+    #: The continuous measurements the ordinal ``evidence`` is discretized from.
+    #: The agent only needs the five-level bins, but the calibration eval logs the
+    #: raw values (they are what the latent/PCA scaling path in ``scaling/`` reduces),
+    #: and discarding them would make those numbers unreconstructable after the fact.
+    signals: dict[str, float] = field(default_factory=dict)
 
 
 def _content(resp) -> str:
@@ -110,6 +115,7 @@ def execute_step_with_llm(
     vecs = [_vec(s) for s in samples]
 
     # Pairwise semantic agreement.
+    sims: list[float] = []
     if n > 1:
         sims = [
             _cosine(vecs[i], vecs[j])
@@ -139,9 +145,24 @@ def execute_step_with_llm(
         "ToolReliability": _clip4(distinct_ratio * 4),
     }
 
+    lengths = [len(_WORD.findall(s.lower())) for s in samples]
+    mean_len = sum(lengths) / n
+    var_len = sum((v - mean_len) ** 2 for v in lengths) / n
+    signals = {
+        "agreement_mean": float(consistency),
+        "agreement_min": float(min(sims)) if n > 1 and sims else 1.0,
+        "answerability": float(answerability),
+        "distinct_ratio": float(distinct_ratio),
+        "length_mean": float(mean_len),
+        # Coefficient of variation: scale-free spread in answer length. Verbose,
+        # waffling samples vary in length; confident ones converge on one form.
+        "length_cv": float(math.sqrt(var_len) / mean_len) if mean_len > 0 else 0.0,
+    }
+
     return ExecutionResult(
         answer=answer,
         evidence=evidence,
         consistency=consistency,
         samples=samples,
+        signals=signals,
     )
