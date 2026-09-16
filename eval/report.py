@@ -171,6 +171,28 @@ def _verdict(results: dict) -> List[str]:
     return lines
 
 
+def _accuracy_at(rollup: dict, coverage: float) -> Optional[float]:
+    """Accuracy at a coverage level, recovered from the stored reliability rollup.
+
+    ``evaluate_scores`` keeps only the one abstention point it was asked for, so this
+    re-derives another from the reliability bins: walk them from the most confident
+    down, accumulating until ``coverage`` of the items are covered.
+    """
+    bins = sorted(rollup.get("reliability") or [], key=lambda b: -b["mean_confidence"])
+    total = rollup.get("n") or sum(b["count"] for b in bins)
+    if not bins or not total:
+        return None
+    target = coverage * total
+    seen = correct = 0.0
+    for b in bins:
+        take = min(b["count"], target - seen)
+        if take <= 0:
+            break
+        correct += b["empirical_accuracy"] * take
+        seen += take
+    return correct / seen if seen else None
+
+
 def _mean_gap(rollup: dict) -> float:
     conf = rollup.get("mean_confidence")
     acc = rollup.get("accuracy")
@@ -327,6 +349,29 @@ def render_report(results: dict) -> str:
     lines += ["", "### Reliability bins (engine)", ""]
     lines += _reliability_table(engine)
     lines += [""]
+
+    by_source = results.get("by_source") or {}
+    if by_source:
+        lines += [
+            "### Per-dataset breakdown",
+            "",
+            "One averaged number hides the most useful thing in this run: self-consistency "
+            "has a known failure mode — a model that is *consistently* wrong looks confident "
+            "— and arithmetic is where that bites, because a wrong method reproduces the same "
+            "wrong answer every sample.",
+            "",
+            "| Dataset | Items | Accuracy | ECE ↓ | AUROC ↑ | AUROC (agreement) | Acc @100% | Acc @50% |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for source, rollup in by_source.items():
+            half = _fmt(_accuracy_at(rollup, 0.5))
+            lines.append(
+                f"| {source} | {rollup.get('n')} | {_fmt(rollup.get('accuracy'))} | "
+                f"{_fmt(rollup.get('ece'))} | {_fmt_interval(rollup.get('auroc'))} | "
+                f"{_fmt(rollup.get('auroc_self_consistency'))} | "
+                f"{_fmt(rollup.get('accuracy_full_coverage'))} | {half} |"
+            )
+        lines += [""]
 
     study = results.get("learning")
     if study:

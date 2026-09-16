@@ -147,6 +147,7 @@ def analyse(rows: Sequence[EvalRow], meta: dict, args: argparse.Namespace) -> di
         "dataset": meta.get("dataset", {}),
         "signals": {k: v for k, v in signals.items() if v},
         "comparisons": comparisons,
+        "by_source": _per_source(rows, args),
     }
 
     if not args.no_learning:
@@ -183,6 +184,40 @@ def analyse(rows: Sequence[EvalRow], meta: dict, args: argparse.Namespace) -> di
     if written:
         results["figures"] = written
     return results
+
+
+def _per_source(rows: Sequence[EvalRow], args: argparse.Namespace) -> Dict[str, dict]:
+    """Score each dataset separately.
+
+    One averaged number can hide the most useful thing in the run. A confidence signal
+    built on self-consistency has a known failure mode -- a model that is *consistently*
+    wrong looks confident -- and arithmetic is exactly where that bites, because a wrong
+    method produces the same wrong answer every sample. Averaging trivia and maths into
+    a single AUROC would report that as mediocre discrimination everywhere, rather than
+    good discrimination in one regime and near-chance in the other.
+    """
+    groups: Dict[str, List[EvalRow]] = {}
+    for row in rows:
+        groups.setdefault(row.source, []).append(row)
+    if len(groups) < 2:
+        return {}
+
+    out: Dict[str, dict] = {}
+    for source, group in sorted(groups.items()):
+        labels = [r.correct for r in group]
+        # A subset with one label makes AUROC undefined; report accuracy and move on.
+        if len(group) < 20 or len(set(labels)) < 2:
+            continue
+        out[source] = evaluate_scores(
+            [r.confidence for r in group],
+            labels,
+            n_bins=args.bins,
+            n_boot=args.bootstrap,
+            seed=args.seed,
+            abstain_fraction=args.abstain,
+        )
+        out[source]["auroc_self_consistency"] = auroc([r.agreement for r in group], labels)
+    return out
 
 
 def build_parser() -> argparse.ArgumentParser:
