@@ -153,6 +153,25 @@ class DirichletBayesianEngine:
         """Discard observed data, returning to the pure prior."""
         self.alpha = self._prior.copy()
 
+    # ----------------------------------------------------------- introspection
+    def observation_counts(self) -> np.ndarray:
+        """Observed counts only, shape ``(125, 5)``: ``alpha_posterior - alpha_prior``.
+
+        Conjugacy makes this exact rather than an estimate -- the prior contributes a
+        fixed pseudo-count, so subtracting it recovers the real data. Useful for
+        answering the question that decides whether a 125-cell table is the right
+        size: how many contexts has this deployment *ever* visited?
+        """
+        return self.alpha - self._prior
+
+    def coverage(self) -> int:
+        """How many of the 125 contexts have at least one real observation."""
+        return int((self.observation_counts().sum(axis=1) > 0).sum())
+
+    def total_observations(self) -> float:
+        """Total real observations across all contexts."""
+        return float(self.observation_counts().sum())
+
     # --------------------------------------------------------- predictive CPT
     def cpt(self) -> np.ndarray:
         """Posterior-predictive CPT, shape ``(5_outcome, 125_context)``.
@@ -293,6 +312,20 @@ def build_bayesian_network():
     return model, outcome_cpd
 
 
+def good_probability(summary: dict) -> float:
+    """Collapse a posterior summary to one scalar: ``P(CERTAIN) + P(HIGH)``.
+
+    This is *the* confidence number the rest of the system reports -- the executor
+    gates on it, the demo prints it, and the calibration eval scores it. It lives here
+    so those three agree by construction rather than by three copies of one expression.
+
+    It is a posterior-predictive probability of a good outcome, so it is on the right
+    scale to be checked against empirical accuracy (see ``eval/metrics.py``).
+    """
+    dist = summary["distribution"]
+    return float(dist.get("CERTAIN", 0.0) + dist.get("HIGH", 0.0))
+
+
 def resolve_conflict(evidence: Dict[str, int]) -> dict:
     """Resolve conflicting/ambiguous evidence into a confident outcome.
 
@@ -307,6 +340,7 @@ __all__ = [
     "DirichletBayesianEngine",
     "PosteriorSummary",
     "resolve_conflict",
+    "good_probability",
     "build_bayesian_network",
     "get_default_engine",
     "context_index",

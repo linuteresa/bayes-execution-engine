@@ -26,7 +26,7 @@ Async API: `POST /jobs {question}` → `{job_id}` → poll `GET /jobs/{job_id}`.
 ## 3. Verify without a model (the real proof)
 
 ```powershell
-pytest                                                          # 60 passed (or 58 + 2 skipped)
+pytest                                                          # 119 passed (a few skip without pgmpy/sklearn)
 
 python demo.py --sim                                            # confident vs ambiguous, side by side
 

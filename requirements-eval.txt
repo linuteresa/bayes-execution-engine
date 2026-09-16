@@ -1,0 +1,8 @@
+# Extra dependencies for the calibration eval (`python -m eval.run_eval`).
+# The core engine and the test suite do not need any of these.
+#
+#   pip install -r requirements.txt -r requirements-eval.txt
+
+matplotlib>=3.7          # reliability / risk-coverage / learning figures (optional:
+                         # without it the report renders every table, just no PNGs)
+datasets>=2.14           # only for `--dataset hf:triviaqa|hf:gsm8k|hf:simpleqa`

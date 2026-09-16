@@ -117,6 +117,20 @@ class LatentBayesPipeline:
     def predict(self, X: np.ndarray) -> np.ndarray:
         return np.array([self.grid.predict(b) for b in self.to_bins(X)])
 
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        """Posterior-predictive distribution per row, shape ``(n, n_outcomes)``.
+
+        The calibration eval needs a *probability*, not an argmax label: it scores
+        ``P(good outcome)`` from the latent grid against the same held-out items the
+        125-cell engine is scored on (``eval/learning.py``). That comparison is what
+        turns this module from a standalone PoC into a measured alternative.
+        """
+        return np.array([self.grid.predictive(b) for b in self.to_bins(X)])
+
+    def coverage(self) -> int:
+        """Latent contexts with at least one observation (vs ``grid.n_contexts``)."""
+        return int((self.grid.alpha > self.grid.prior).any(axis=1).sum())
+
     # -------------------------------------------------------------- reporting
     def explained_variance(self) -> float:
         return float(self.pca.explained_variance_ratio_.sum())

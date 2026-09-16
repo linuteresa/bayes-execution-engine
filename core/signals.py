@@ -1,15 +1,27 @@
 """
-Map raw tool output into ordinal Bayesian evidence.
+Legacy keyword evidence extractor -- **off by default, not the agent's evidence path**.
 
-The Bayesian engine reasons over three ordinal signals (TaskStatus, DataQuality,
-ToolReliability). Those signals have to come from *somewhere* real. In this demo the
-"somewhere" is the text returned by a tool call; in a production system it would be
-structured tool metadata (HTTP status, row counts, schema-validation results,
-retriever scores, circuit-breaker state, ...).
+The engine reasons over three ordinal signals (TaskStatus, DataQuality,
+ToolReliability). In this system those signals are *measured*: the executor samples the
+backend several times and computes how much the samples agree
+(``nodes/llm_executor.py``). That is the path ``nodes/executor.py`` runs, and the one
+the README describes.
 
-This module isolates that mapping so the engine never hardcodes evidence. Each
-extractor returns an index in 0..4 where 0 = CERTAIN (best) and 4 = AMBIGUOUS (worst),
-matching ``bayesian_engine.STATE_NAMES``.
+This module is the older, weaker alternative: infer the same three signals by
+substring-matching words like "conflict", "failed" or "timeout" in the result text,
+plus a crude "does it contain a digit" specificity penalty. It is kept for one real
+case -- a deployment with **no sampling budget**, where a single-shot tool returns text
+and nothing else, so there is no disagreement to measure. Enable it explicitly with::
+
+    EXECUTOR_EVIDENCE=keywords
+
+Know what you are getting. It cannot tell a result that *reports* a conflict from one
+that merely discusses the word, it is trivially gamed by phrasing, and it is blind to
+the case that matters most: a fluent, confident, entirely wrong answer containing none
+of the trigger words. Prefer self-consistency wherever you can afford the samples.
+
+Each extractor returns an index in 0..4 where 0 = CERTAIN (best) and 4 = AMBIGUOUS
+(worst), matching ``bayesian_engine.STATE_NAMES``.
 """
 
 from __future__ import annotations

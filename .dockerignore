@@ -13,3 +13,5 @@ models/
 docs/
 *.md
 tests/
+# dev-only calibration harness; not needed at runtime
+eval/

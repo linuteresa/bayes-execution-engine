@@ -15,7 +15,7 @@ ignore = ["E501"]  # long docstrings/tables allowed
 
 [tool.ruff.lint.isort]
 
-known-first-party = ["core", "nodes", "bayesian_engine", "scaling", "persistence", "service"]
+known-first-party = ["core", "nodes", "bayesian_engine", "scaling", "persistence", "service", "eval"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
