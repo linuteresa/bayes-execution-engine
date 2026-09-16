@@ -47,6 +47,9 @@ import numpy as np
 STATE_NAMES: Dict[int, str] = {0: "CERTAIN", 1: "HIGH", 2: "MEDIUM", 3: "LOW", 4: "AMBIGUOUS"}
 STATE_MAP: Dict[str, int] = {v: k for k, v in STATE_NAMES.items()}
 
+#: Outcome states counted as "good" by the reported confidence, P(CERTAIN) + P(HIGH).
+GOOD_STATES: Tuple[int, int] = (0, 1)
+
 PARENTS: Tuple[str, str, str] = ("TaskStatus", "DataQuality", "ToolReliability")
 N_STATES = 5
 N_CONTEXTS = N_STATES ** len(PARENTS)  # 125
@@ -78,6 +81,13 @@ class PosteriorSummary:
     credible_low: float
     credible_high: float
     effective_sample_size: float
+    #: ``P(CERTAIN) + P(HIGH)`` -- the scalar the executor and the eval actually report.
+    good_confidence: float = 0.0
+    #: Credible interval for ``good_confidence``. Distinct from ``credible_low/high``,
+    #: which bound the MAP state's probability: those are two different quantities and
+    #: pairing a confidence with the wrong one makes the uncertainty meaningless.
+    good_credible_low: float = 0.0
+    good_credible_high: float = 0.0
 
     def as_dict(self) -> dict:
         return {
@@ -87,6 +97,8 @@ class PosteriorSummary:
             "distribution": self.distribution,
             "credible_interval": [self.credible_low, self.credible_high],
             "effective_sample_size": self.effective_sample_size,
+            "good_confidence": self.good_confidence,
+            "good_credible_interval": [self.good_credible_low, self.good_credible_high],
         }
 
 
@@ -223,6 +235,8 @@ class DirichletBayesianEngine:
         # 95% credible interval for the MAP probability under the Dirichlet posterior
         # (Beta marginal: theta_k ~ Beta(alpha_k, alpha_0 - alpha_k)).
         low, high = self._beta_credible_interval(evidence, map_idx)
+        # The reported confidence sums two states, so it needs its own bound.
+        good_low, good_high = self._beta_credible_interval(evidence, GOOD_STATES)
 
         return PosteriorSummary(
             state=STATE_NAMES[map_idx],
@@ -232,11 +246,34 @@ class DirichletBayesianEngine:
             credible_low=low,
             credible_high=high,
             effective_sample_size=float(ess),
+            good_confidence=float(probs[list(GOOD_STATES)].sum()),
+            good_credible_low=good_low,
+            good_credible_high=good_high,
         )
 
     def _beta_credible_interval(
-        self, evidence: Dict[str, int], outcome_idx: int, mass: float = 0.95
+        self,
+        evidence: Dict[str, int],
+        outcomes: "int | Iterable[int]",
+        mass: float = 0.95,
     ) -> Tuple[float, float]:
+        """Credible interval for the total probability of one or more outcome states.
+
+        The Dirichlet's aggregation property does the work: if
+        ``theta ~ Dirichlet(alpha)`` then the sum of any subset ``S`` of its components
+        is marginally ``Beta(sum_{k in S} alpha_k, alpha_0 - sum_{k in S} alpha_k)``.
+        A single state is just the one-element case, so this generalises the old
+        per-state interval exactly rather than approximating it.
+
+        Passing a set matters because the number this system *reports* is
+        ``P(CERTAIN) + P(HIGH)`` -- a sum of two states. Bounding a single MAP state
+        instead would attach an interval to a different quantity than the confidence it
+        travels with.
+        """
+        idxs = [outcomes] if isinstance(outcomes, (int, np.integer)) else sorted(set(outcomes))
+        for i in idxs:
+            if not 0 <= i < N_STATES:
+                raise ValueError(f"outcome index {i} out of range")
 
         ranges = [
             [evidence[name]] if name in evidence else range(N_STATES) for name in PARENTS
@@ -246,8 +283,9 @@ class DirichletBayesianEngine:
             for data in ranges[1]:
                 for tool in ranges[2]:
                     a = self.alpha[context_index(task, data, tool)]
-                    a_k += a[outcome_idx]
-                    a_rest += a.sum() - a[outcome_idx]
+                    selected = float(a[idxs].sum())
+                    a_k += selected
+                    a_rest += a.sum() - selected
                     n += 1
         a_k /= n
         a_rest /= n
@@ -321,6 +359,10 @@ def good_probability(summary: dict) -> float:
 
     It is a posterior-predictive probability of a good outcome, so it is on the right
     scale to be checked against empirical accuracy (see ``eval/metrics.py``).
+
+    The matching uncertainty is ``summary["good_credible_interval"]``. Do **not** pair
+    this number with ``summary["credible_interval"]``: that bounds the MAP state's
+    probability, which is a different quantity and need not even contain this one.
     """
     dist = summary["distribution"]
     return float(dist.get("CERTAIN", 0.0) + dist.get("HIGH", 0.0))
@@ -341,6 +383,7 @@ __all__ = [
     "PosteriorSummary",
     "resolve_conflict",
     "good_probability",
+    "GOOD_STATES",
     "build_bayesian_network",
     "get_default_engine",
     "context_index",

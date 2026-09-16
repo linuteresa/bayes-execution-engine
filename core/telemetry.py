@@ -63,8 +63,15 @@ def log_conflict_resolution(
 ) -> None:
     """Specialised event for Bayesian conflict resolution.
 
-    Emits the confidence score, the resolved state, the credible interval, and the
-    full evidence matrix coordinates so alerts can fire on degraded data quality.
+    Emits both confidence scalars with the interval that belongs to each, plus the full
+    evidence coordinates so alerts can fire on degraded data quality.
+
+    The two pairs are *not* interchangeable. ``map_confidence`` is ``P(MAP state)`` and
+    is bounded by ``map_credible_interval``; ``confidence`` is ``P(CERTAIN)+P(HIGH)``,
+    the number the executor gates on, and is bounded by ``credible_interval``. Emitting
+    the MAP interval alongside the gating confidence -- as this used to -- attaches an
+    uncertainty band to a quantity it does not describe, and dashboards built on it
+    would alert on the wrong thing.
     """
     log_event(
         "bayes.conflict_resolved",
@@ -72,8 +79,12 @@ def log_conflict_resolution(
         task=task,
         evidence=evidence,
         resolved_state=summary.get("state"),
-        confidence=summary.get("confidence"),
-        credible_interval=summary.get("credible_interval"),
+        confidence=summary.get("good_confidence", summary.get("confidence")),
+        credible_interval=summary.get(
+            "good_credible_interval", summary.get("credible_interval")
+        ),
+        map_confidence=summary.get("confidence"),
+        map_credible_interval=summary.get("credible_interval"),
         effective_sample_size=summary.get("effective_sample_size"),
         distribution=summary.get("distribution"),
     )

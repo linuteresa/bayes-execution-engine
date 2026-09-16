@@ -17,6 +17,8 @@ The Categorical/Multinomial's **conjugate prior is the Dirichlet** — the decis
 - **Simplex support:** the posterior-predictive mean `α/α₀` is a valid distribution by
   construction - every CPT column sums to 1 with no renormalization.
 - **Free uncertainty:** each component is `Beta(α_k, α₀−α_k)`, giving a 95% credible interval;
+  and by Dirichlet aggregation *any sum* of components is `Beta(Σ_S α_k, α₀−Σ_S α_k)` too, which
+  is what bounds the reported `P(CERTAIN)+P(HIGH)` exactly rather than approximately;
   `α₀ = Σα` is the effective sample size, so intervals shrink as data arrives.
 
 > The v0 code called `np.random.dirichlet(...)` per request — sampling a *random* CPT and

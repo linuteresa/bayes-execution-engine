@@ -58,6 +58,7 @@ class EvalRow:
 
     # --- engine output ---
     confidence: float
+    #: 95% credible interval for ``confidence`` (the summed good-state probability).
     credible_low: float
     credible_high: float
     effective_sample_size: float
@@ -75,6 +76,15 @@ class EvalRow:
     n_samples: int
     signals: Dict[str, float] = field(default_factory=dict)
     samples: List[str] = field(default_factory=list)
+
+    # --- provenance, stamped on every row ---
+    # Deliberately duplicated per row rather than kept only in a sibling metrics.json.
+    # rows.jsonl is the documented unit of exchange, and a file that can be moved or
+    # shared on its own must carry the one fact that stops a synthetic run being read as
+    # a real calibration result. `None` means unknown, which is NOT the same as False.
+    is_simulated: Optional[bool] = None
+    answerer: str = ""
+    model: str = ""
 
     @property
     def context(self) -> tuple[int, int, int]:
@@ -129,8 +139,11 @@ def run_harness(
             data_quality=int(result.evidence["DataQuality"]),
             tool_reliability=int(result.evidence["ToolReliability"]),
             confidence=good_probability(summary),
-            credible_low=float(summary["credible_interval"][0]),
-            credible_high=float(summary["credible_interval"][1]),
+            # The interval for P(CERTAIN)+P(HIGH), i.e. for `confidence` itself -- not
+            # summary["credible_interval"], which bounds the MAP state's probability and
+            # need not even contain this number.
+            credible_low=float(summary["good_credible_interval"][0]),
+            credible_high=float(summary["good_credible_interval"][1]),
             effective_sample_size=float(summary["effective_sample_size"]),
             map_state=str(summary["state"]),
             agreement=float(result.consistency),
@@ -141,6 +154,9 @@ def run_harness(
             n_samples=n_samples,
             signals={k: float(result.signals.get(k, 0.0)) for k in SIGNAL_KEYS},
             samples=list(result.samples) if keep_samples else [],
+            is_simulated=bool(is_simulated(answerer)),
+            answerer=str(getattr(answerer, "name", type(answerer).__name__)),
+            model=str(getattr(answerer, "model_name", "unknown")),
         )
         rows.append(row)
         if progress is not None:
@@ -183,6 +199,28 @@ def read_rows(path: Path | str) -> List[EvalRow]:
     return rows
 
 
+def metadata_from_rows(rows: Sequence[EvalRow], *, dataset_spec: str) -> dict:
+    """Rebuild provenance from the rows themselves, for replay without a model.
+
+    Returns ``is_simulated=None`` when the rows predate per-row provenance or disagree
+    among themselves. Unknown provenance must stay unknown: silently defaulting it to
+    "real" is exactly how a synthetic run gets published as a calibration result.
+    """
+    flags = {r.is_simulated for r in rows}
+    answerers = {r.answerer for r in rows if r.answerer}
+    models = {r.model for r in rows if r.model}
+    return {
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "answerer": answerers.pop() if len(answerers) == 1 else "unknown",
+        "model": models.pop() if len(models) == 1 else "unknown",
+        "is_simulated": flags.pop() if len(flags) == 1 else None,
+        "dataset_spec": dataset_spec,
+        "n_items": len(rows),
+        "n_samples_per_item": rows[0].n_samples if rows else 0,
+        "replayed_from_rows": True,
+    }
+
+
 def run_metadata(answerer, items, *, n_samples: int, dataset_spec: str) -> dict:
     """Provenance stamped onto every artefact.
 
@@ -220,6 +258,7 @@ __all__ = [
     "write_rows",
     "read_rows",
     "run_metadata",
+    "metadata_from_rows",
     "outcome_label",
     "SIGNAL_KEYS",
 ]

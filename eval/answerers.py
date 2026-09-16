@@ -96,10 +96,12 @@ class LlamaAnswerer:
             temperature=self.temperature, logprobs=self.request_logprobs
         )
         self._logprobs: List[float] = []
+        self._expected_samples = 0
         self.model_name = os.getenv("LLAMA_MODEL", "local-gguf")
 
     def sampler_for(self, item: EvalItem, n_samples: int = 4) -> "LlamaAnswerer":
         self._logprobs = []
+        self._expected_samples = max(1, int(n_samples))
         return self
 
     def invoke(self, prompt: str):
@@ -132,7 +134,14 @@ class LlamaAnswerer:
         return response
 
     def mean_logprob(self) -> Optional[float]:
-        if not self._logprobs:
+        """Mean over this item's samples, or ``None`` unless *every* sample supplied one.
+
+        A mean over whichever subset happened to carry logprobs is not comparable with
+        one averaged over all N samples, and the CLI treats this baseline as all-or-
+        nothing across items. Reporting a partially observed value would quietly mix the
+        two and bias the comparison, so an incomplete item withdraws the baseline.
+        """
+        if not self._logprobs or len(self._logprobs) < self._expected_samples:
             return None
         return float(sum(self._logprobs) / len(self._logprobs))
 

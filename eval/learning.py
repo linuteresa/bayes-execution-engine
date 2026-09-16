@@ -103,7 +103,8 @@ def score_rows(rows: Sequence[EvalRow], engine: DirichletBayesianEngine) -> Dict
                 "ToolReliability": row.tool_reliability,
             }
         ).as_dict()
-        low, high = summary["credible_interval"]
+        # Interval for the confidence being scored, not for the MAP state.
+        low, high = summary["good_credible_interval"]
         confidences.append(good_probability(summary))
         widths.append(float(high) - float(low))
         ess.append(float(summary["effective_sample_size"]))
@@ -220,7 +221,14 @@ def latent_confidences(
     if X_train.shape[0] <= n_components or np.allclose(X_train.std(axis=0), 0):
         return None
 
-    pipe = LatentBayesPipeline(n_components=n_components, n_bins=n_bins)
+    try:
+        pipe = LatentBayesPipeline(n_components=n_components, n_bins=n_bins)
+    except ImportError:  # pragma: no cover - scikit-learn absent
+        # `scaling.latent_bayes` imports fine without scikit-learn and only raises when
+        # the pipeline is constructed, so importing the module is not enough of a guard.
+        # Without this the whole learning study dies in an environment that is merely
+        # missing an optional extra.
+        return None
     pipe.fit_projection(X_train)
     pipe.update(X_train, np.array([outcome_label(r.correct) for r in train]))
 

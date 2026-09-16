@@ -21,7 +21,14 @@ from typing import Dict, List, Optional, Sequence
 from eval import figures as figures_mod
 from eval.answerers import build_answerer, is_simulated
 from eval.datasets import describe, load_items
-from eval.harness import EvalRow, read_rows, run_harness, run_metadata, write_rows
+from eval.harness import (
+    EvalRow,
+    metadata_from_rows,
+    read_rows,
+    run_harness,
+    run_metadata,
+    write_rows,
+)
 from eval.learning import run_learning_study
 from eval.metrics import auroc, bootstrap_diff, brier_score, evaluate_scores, risk_coverage
 from eval.report import SHORT_LABELS, write_report
@@ -186,6 +193,14 @@ def analyse(rows: Sequence[EvalRow], meta: dict, args: argparse.Namespace) -> di
     return results
 
 
+def _count(rows: Sequence[EvalRow], attr: str) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for row in rows:
+        key = str(getattr(row, attr))
+        out[key] = out.get(key, 0) + 1
+    return dict(sorted(out.items()))
+
+
 def _per_source(rows: Sequence[EvalRow], args: argparse.Namespace) -> Dict[str, dict]:
     """Score each dataset separately.
 
@@ -265,14 +280,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.rows:
         rows = read_rows(args.rows)
-        meta_path = Path(args.rows).with_name("metrics.json")
-        meta = {}
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text(encoding="utf-8")).get("metadata", {})
-        meta.setdefault("dataset_spec", args.dataset)
-        meta.setdefault("n_items", len(rows))
-        meta.setdefault("n_samples_per_item", rows[0].n_samples if rows else args.samples)
-        meta["dataset"] = meta.get("dataset") or {"n_items": len(rows)}
+        if not rows:
+            print(f"no rows in {args.rows}", file=sys.stderr)
+            return 1
+        # Provenance comes from the rows, not from whatever metrics.json happens to sit
+        # next to them: a rows file can be moved or shared alone, and stale adjacent
+        # metadata could label a different run entirely.
+        meta = metadata_from_rows(rows, dataset_spec=args.dataset)
+        if meta["is_simulated"] is None:
+            print(
+                "WARNING: these rows carry no provenance (written before it was "
+                "recorded, or mixed from several runs). The report cannot certify "
+                "whether they came from a real model, and will say so.",
+                file=sys.stderr,
+            )
+        meta["dataset"] = {
+            "n_items": len(rows),
+            "by_difficulty": _count(rows, "difficulty"),
+            "by_source": _count(rows, "source"),
+        }
     else:
         rows, meta = collect_rows(args)
         write_rows(rows, out / "rows.jsonl")
