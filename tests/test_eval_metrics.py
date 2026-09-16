@@ -111,7 +111,8 @@ def test_bootstrap_diff_detects_a_real_gap():
     """A perfect ranker vs a constant one: the AUROC difference must exclude 0."""
     rng = np.random.default_rng(2)
     correct = rng.integers(0, 2, size=200)
-    good = correct + rng.normal(0, 0.05, size=200)
+    # Clipped: these are probabilities, and the metrics now reject out-of-range input.
+    good = np.clip(correct + rng.normal(0, 0.05, size=200), 0.0, 1.0)
     flat = np.full(200, 0.5)
     delta = bootstrap_diff(lambda s, y: auroc(s, y), good, flat, correct, n_boot=400, seed=5)
     assert delta.point > 0.4
@@ -146,3 +147,30 @@ def test_metrics_reject_malformed_input():
         brier_score([], [])
     with pytest.raises(ValueError):
         expected_calibration_error([0.5], [2])
+
+
+def test_metrics_reject_scores_outside_the_unit_interval():
+    """A raw score that was never a probability must be rejected, not silently clipped.
+
+    Out-of-range values used to land in the end reliability bins while Brier and ECE
+    kept using the raw number, which produces a calibration result that looks valid.
+    """
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        brier_score([1.4, 0.2], [1, 0])
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        expected_calibration_error([-0.3, 0.5], [0, 1])
+    # The boundaries themselves are legal.
+    assert brier_score([0.0, 1.0], [0, 1]) == pytest.approx(0.0)
+
+
+def test_coverage_points_match_the_row_level_curve():
+    """The stored deciles must equal a direct computation, not a bin reconstruction."""
+    rng = np.random.default_rng(11)
+    scores = rng.random(200)
+    correct = (rng.random(200) < scores).astype(int)
+    rollup = evaluate_scores(scores, correct, n_boot=50)
+    curve = risk_coverage(scores, correct)
+    for point in rollup["coverage_points"]:
+        assert point["accuracy"] == pytest.approx(
+            curve.accuracy_at_coverage(point["coverage"])
+        )

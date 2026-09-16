@@ -10,9 +10,9 @@ update** driven by how consistently the model answers.
 
 Whether that confidence is actually *calibrated* is a falsifiable claim, so the repo ships
 the harness that tests it and reports what it found: on 500 TriviaQA + GSM8K items the
-confidence is well calibrated (ECE 0.166, less than half either baseline) and, on factual
+confidence is well calibrated (ECE 0.163, less than half either baseline) and, on factual
 recall, genuinely discriminative — **abstaining on the least-confident half lifts accuracy
-from 0.42 to 0.57**. It also reports where the signal fails. See
+from 0.42 to 0.61**. It also reports where the signal fails. See
 **[Calibration](#calibration-measuring-the-confidence-claim)**.
 
 ---
@@ -82,9 +82,15 @@ its conjugate prior is the **Dirichlet** — that's the whole reason it's the ri
 
 ```python
 resolve_conflict({"TaskStatus": 4, "DataQuality": 4, "ToolReliability": 4})
-# {"state": "AMBIGUOUS", "confidence": 0.43,
-#  "credible_interval": [0.18, 0.69], "effective_sample_size": 13.0, ...}
+# {"state": "AMBIGUOUS",
+#  "confidence": 0.43, "credible_interval": [0.18, 0.69],          # P(MAP state)
+#  "good_confidence": 0.16, "good_credible_interval": [0.02, 0.39], # P(CERTAIN)+P(HIGH)
+#  "effective_sample_size": 13.0, ...}
 ```
+
+Two pairs, deliberately distinct: the executor gates on `good_confidence`, so that is the one
+with `good_credible_interval` around it. Pairing a confidence with the other interval attaches
+a band to a quantity it doesn't describe — it need not even contain the number.
 
 **Why 125?** Not "optimal" — it's `5³` (three signals × five ordinal levels), a granularity
 choice: too coarse can't separate "uncertain" from "contradictory"; too fine leaves each
@@ -122,9 +128,9 @@ Full report: **[eval/results/REPORT.md](eval/results/REPORT.md)**.
 
 | Confidence signal | ECE ↓ | Brier ↓ | AUROC ↑ |
 |---|---|---|---|
-| **Bayesian engine (125-cell Dirichlet)** | **0.166** | **0.233** [0.219, 0.246] | 0.660 [0.610, 0.711] |
-| Baseline: self-consistency agreement | 0.399 | 0.377 [0.346, 0.407] | 0.684 [0.636, 0.733] |
-| Baseline: mean token logprob | 0.458 | 0.401 [0.372, 0.429] | **0.733** [0.683, 0.779] |
+| **Bayesian engine (125-cell Dirichlet)** | **0.163** | **0.239** [0.226, 0.254] | 0.629 [0.576, 0.679] |
+| Baseline: self-consistency agreement | 0.402 | 0.393 [0.360, 0.425] | 0.643 [0.590, 0.694] |
+| Baseline: mean token logprob | 0.454 | 0.412 [0.382, 0.441] | **0.690** [0.641, 0.740] |
 
 Read honestly, that is a **split decision**, and the split is the interesting part:
 
@@ -132,18 +138,19 @@ Read honestly, that is a **split decision**, and the split is the interesting pa
   which is what you'd expect — it emits an actual posterior probability, while agreement and
   `exp(mean logprob)` are raw scores that were never on the probability scale.
 - **It does not buy discrimination.** On AUROC it is not measurably better than plain
-  agreement (−0.024, CI straddles 0) and is *worse* than mean token logprob (−0.072, CI
-  excludes 0). On this data the 125 cells are not adding ranking power over the raw signal.
+  agreement (−0.014 [−0.045, 0.018], CI straddles 0) and is *worse* than mean token logprob
+  (−0.060 [−0.094, −0.028], CI excludes 0). The 125 cells are not adding ranking power over
+  the raw signal.
 
 ### The signal works in one regime and not the other
 
 | Dataset | Items | Accuracy | ECE ↓ | AUROC ↑ | Acc @100% | Acc @50% |
 |---|---|---|---|---|---|---|
-| TriviaQA | 250 | 0.416 | **0.074** | **0.741** [0.679, 0.804] | 0.416 | **0.566** |
-| GSM8K | 250 | 0.220 | 0.270 | 0.568 [0.482, 0.647] | 0.220 | 0.236 |
+| TriviaQA | 250 | 0.424 | **0.089** | **0.722** [0.654, 0.784] | 0.424 | **0.608** |
+| GSM8K | 250 | 0.220 | 0.278 | 0.529 [0.443, 0.615] | 0.220 | 0.224 |
 
 On factual recall the confidence is both well calibrated and genuinely discriminative:
-**abstain on the least-confident half and accuracy goes from 0.42 to 0.57.** On arithmetic the
+**abstain on the least-confident half and accuracy goes from 0.42 to 0.61.** On arithmetic the
 AUROC confidence interval straddles 0.5 — the signal is indistinguishable from chance.
 
 That is not a bug, it is self-consistency's known failure mode made concrete: agreement
@@ -165,25 +172,29 @@ confidence interval:
 
 | Engine | ECE ↓ | Brier ↓ | AUROC ↑ |
 |---|---|---|---|
-| Prior only (as shipped) | 0.176 | 0.224 [0.206, 0.243] | 0.700 [0.636, 0.764] |
-| Posterior (250 observations) | **0.095** | **0.205** [0.187, 0.223] | 0.665 [0.590, 0.733] |
+| Prior only (as shipped) | 0.162 | 0.247 [0.228, 0.266] | 0.594 [0.522, 0.667] |
+| Posterior (250 observations) | **0.107** | **0.225** [0.202, 0.248] | 0.613 [0.542, 0.685] |
 
-ECE change from observing: **−0.081 [−0.100, −0.043]** on held-out items. Calibration improves;
-discrimination is unchanged within noise, which fits the split decision above — counts tell the
-model *how often this context is right*, not how to rank contexts it already separates.
+ECE change from observing: **−0.055 [−0.107, 0.012]** on held-out items. The point estimate
+improves and the learning curve falls monotonically for most of its length, but **the interval
+straddles zero — at 250 held-out items this run does not establish the gain statistically.**
+Treat it as suggestive, not demonstrated; the honest fix is more items, not a rephrasing.
+Discrimination is unchanged within noise either way, which fits the split decision above:
+counts tell the model *how often a context is right*, not how to rank contexts it already
+separates.
 
 And the credible intervals do what conjugacy says they should, measured rather than asserted:
 
-| Mean ESS (α₀) | 15.5 | 20.4 | 25.3 | 38.5 | 50.9 |
+| Mean ESS (α₀) | 14.4 | 20.7 | 30.0 | 39.0 | 51.5 |
 |---|---|---|---|---|---|
-| **Mean 95% CI width** | 0.434 | 0.395 | 0.372 | 0.308 | 0.266 |
+| **Mean 95% CI width** | 0.438 | 0.383 | 0.308 | 0.305 | 0.243 |
 
-**Context coverage: 39 of 125 cells** were ever visited across 500 items (31%); only 12 saw
+**Context coverage: 42 of 125 cells** were ever visited across 500 items (34%); only 12 saw
 10+ observations. Unvisited cells sit at their prior forever, so that is the honest empirical
 argument for reducing dimensionality rather than growing the table. Running the same rows
 through `scaling/latent_bayes.py` — six continuous signals → PCA → quantile bins, which are
-populated by construction — reaches **66 of 125** cells and a slightly *better* held-out ECE
-(0.067 vs 0.095) at comparable AUROC.
+populated by construction — reaches **64 of 125** cells and a better held-out ECE
+(0.072 vs 0.107) at comparable AUROC.
 
 Full method, metric definitions and limitations: **[docs/CALIBRATION.md](docs/CALIBRATION.md)**.
 
@@ -256,7 +267,7 @@ no model and no network.
   against a live model.
 - ~~**Online CPT learning** — feed `(evidence, outcome)` back via `engine.observe`.~~ Built:
   `eval/learning.py` fits the posterior on a train split and scores it held-out.
-- **Beat chance on arithmetic** — the measured GSM8K AUROC is 0.568 (CI straddles 0.5).
+- **Beat chance on arithmetic** — the measured GSM8K AUROC is 0.529 (CI straddles 0.5).
   Agreement can't separate "consistently right" from "consistently wrong", so this needs a
   signal that isn't self-agreement: verifier sampling, or execution of the derived arithmetic.
 - **Semantic agreement** — swap bag-of-words cosine for embeddings/NLI (interface ready).

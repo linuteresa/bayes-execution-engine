@@ -14,6 +14,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 
+UNKNOWN_PROVENANCE_BANNER = (
+    "> **⚠️ PROVENANCE UNKNOWN — THIS MAY NOT BE A REAL CALIBRATION RESULT.**\n"
+    "> These rows carry no record of which answerer produced them, so this report\n"
+    "> cannot certify that a real model was involved rather than the simulated\n"
+    "> stand-in in `eval.answerers`. Treat the numbers below as unverified until the\n"
+    "> run is reproduced with `--model llama`.\n"
+)
+
 SIMULATED_BANNER = (
     "> **⚠️ SIMULATED RUN — NOT A CALIBRATION RESULT.**\n"
     "> These numbers come from `eval.answerers.SimulatedAnswerer`, a deterministic\n"
@@ -22,6 +30,14 @@ SIMULATED_BANNER = (
     "> model available. It says nothing about any real model's calibration. For a\n"
     "> reportable number, start `llama-server` and re-run with `--model llama`.\n"
 )
+
+
+def _simulated_cell(flag: Optional[bool]) -> str:
+    if flag is True:
+        return "**yes — see banner**"
+    if flag is False:
+        return "no"
+    return "**unknown — see banner**"
 
 
 def _fmt(value: Optional[float], digits: int = 3) -> str:
@@ -172,25 +188,24 @@ def _verdict(results: dict) -> List[str]:
 
 
 def _accuracy_at(rollup: dict, coverage: float) -> Optional[float]:
-    """Accuracy at a coverage level, recovered from the stored reliability rollup.
+    """Accuracy at a coverage level, read from the row-level curve computed upstream.
 
-    ``evaluate_scores`` keeps only the one abstention point it was asked for, so this
-    re-derives another from the reliability bins: walk them from the most confident
-    down, accumulating until ``coverage`` of the items are covered.
+    ``evaluate_scores`` stores decile points of the real risk-coverage curve, so this is
+    a lookup rather than a reconstruction. It used to re-derive the value from the
+    reliability bins by taking a fractional slice of the bin straddling the cutoff,
+    which assumes uniform correctness within that bin and was measurably wrong -- it
+    understated TriviaQA's accuracy at 50% coverage as 0.566 against a true 0.600.
     """
-    bins = sorted(rollup.get("reliability") or [], key=lambda b: -b["mean_confidence"])
-    total = rollup.get("n") or sum(b["count"] for b in bins)
-    if not bins or not total:
+    points = rollup.get("coverage_points") or []
+    if not points:
         return None
-    target = coverage * total
-    seen = correct = 0.0
-    for b in bins:
-        take = min(b["count"], target - seen)
-        if take <= 0:
-            break
-        correct += b["empirical_accuracy"] * take
-        seen += take
-    return correct / seen if seen else None
+    nearest = min(points, key=lambda p: abs(p["coverage"] - coverage))
+    # Exact-decile lookup only. Snapping a nearby request onto a decile would return a
+    # real number under a label that misstates which coverage it belongs to, which is a
+    # subtler version of the bug this function was rewritten to fix.
+    if abs(nearest["coverage"] - coverage) > 1e-6:
+        return None
+    return nearest["accuracy"]
 
 
 def _mean_gap(rollup: dict) -> float:
@@ -307,15 +322,27 @@ def _coverage_section(study: dict) -> List[str]:
 def render_report(results: dict) -> str:
     """Build the full markdown report from a results dict."""
     meta = results.get("metadata") or {}
-    simulated = bool(meta.get("is_simulated"))
+    # Tri-state on purpose: True / False / None(unknown). `bool(None)` would quietly
+    # promote "we don't know" into "it's real", which is the one mistake this banner
+    # exists to prevent.
+    simulated_flag = meta.get("is_simulated")
+    simulated = simulated_flag is True
+    unknown_provenance = simulated_flag is None
     dataset = results.get("dataset") or {}
     signals = results.get("signals") or {}
     engine = signals.get("engine") or {}
 
-    title = "Calibration report" + (" — SIMULATED (not a result)" if simulated else "")
+    if simulated:
+        title = "Calibration report — SIMULATED (not a result)"
+    elif unknown_provenance:
+        title = "Calibration report — UNVERIFIED PROVENANCE"
+    else:
+        title = "Calibration report"
     lines: List[str] = [f"# {title}", ""]
     if simulated:
         lines += [SIMULATED_BANNER, ""]
+    elif unknown_provenance:
+        lines += [UNKNOWN_PROVENANCE_BANNER, ""]
 
     lines += [
         "## Provenance",
@@ -325,7 +352,7 @@ def render_report(results: dict) -> str:
         f"| Generated (UTC) | {meta.get('timestamp_utc', 'unknown')} |",
         f"| Answerer | `{meta.get('answerer', 'unknown')}` |",
         f"| Model | `{meta.get('model', 'unknown')}` |",
-        f"| Simulated | {'**yes — see banner**' if simulated else 'no'} |",
+        f"| Simulated | {_simulated_cell(simulated_flag)} |",
         f"| Dataset spec | `{meta.get('dataset_spec', 'unknown')}` |",
         f"| Items | {meta.get('n_items', dataset.get('n_items', 0))} |",
         f"| Samples per item | {meta.get('n_samples_per_item', 0)} |",
@@ -416,4 +443,11 @@ def write_report(results: dict, path: Path | str) -> Path:
     return path
 
 
-__all__ = ["render_report", "write_report", "SIMULATED_BANNER", "SIGNAL_LABELS", "SHORT_LABELS"]
+__all__ = [
+    "render_report",
+    "write_report",
+    "SIMULATED_BANNER",
+    "UNKNOWN_PROVENANCE_BANNER",
+    "SIGNAL_LABELS",
+    "SHORT_LABELS",
+]

@@ -35,6 +35,22 @@ def _as_arrays(scores: Sequence[float], correct: Sequence[int]) -> Tuple[np.ndar
         raise ValueError("empty evaluation set")
     if not np.all(np.isfinite(s)):
         raise ValueError("scores contain NaN/inf")
+    # Every metric here treats `scores` as a probability. A value genuinely outside
+    # [0, 1] would be silently clipped into the end bins by the reliability binning
+    # while Brier/ECE kept using the raw number -- a quietly invalid calibration
+    # result -- so reject it loudly.
+    #
+    # The tolerance is not slack: quantities that are mathematically in [0, 1], like a
+    # cosine similarity or a sum of posterior probabilities, routinely land an ulp
+    # outside it. Failing a 2000-generation run over 1.0000000000000002 would be a bug
+    # in the guard, so epsilon-level overshoot is clamped and anything larger raises.
+    tol = 1e-9
+    if s.min() < -tol or s.max() > 1.0 + tol:
+        raise ValueError(
+            f"scores must lie in [0, 1]; got [{s.min()!r}, {s.max()!r}]. "
+            "Map a raw score onto the probability scale before calibrating it."
+        )
+    s = np.clip(s, 0.0, 1.0)
     if not np.all((y == 0) | (y == 1)):
         raise ValueError("correct must be binary 0/1")
     return s, y
@@ -300,6 +316,14 @@ def evaluate_scores(
     s, y = _as_arrays(scores, correct)
     curve = risk_coverage(s, y)
     coverage = max(1.0 - abstain_fraction, 1.0 / s.size)
+    # Deciles of the real row-level curve. The reliability bins cannot stand in for
+    # these: recovering "the most confident 50%" from equal-width confidence bins means
+    # taking a fraction of whichever bin straddles the cutoff, which silently assumes
+    # every item inside that bin is equally likely to be correct.
+    coverage_points = [
+        {"coverage": c, "accuracy": curve.accuracy_at_coverage(c)}
+        for c in (round(0.1 * k, 1) for k in range(1, 11))
+    ]
     return {
         "n": int(s.size),
         "accuracy": float(y.mean()),
@@ -317,6 +341,7 @@ def evaluate_scores(
         "accuracy_full_coverage": curve.full_accuracy,
         "abstain_fraction": abstain_fraction,
         "accuracy_at_coverage": curve.accuracy_at_coverage(coverage),
+        "coverage_points": coverage_points,
         "reliability": [
             {
                 "lower": b.lower,

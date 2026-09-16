@@ -80,13 +80,22 @@ def _vec(s: str) -> Counter:
 
 
 def _cosine(a: Counter, b: Counter) -> float:
+    """Cosine similarity of two bag-of-words counts, in [0, 1].
+
+    Counts are non-negative, so the true value cannot leave [0, 1] -- but the division
+    can land a hair outside it (1.0000000000000002 for identical vectors). Downstream
+    that value is treated as a probability, so clamp here rather than let float noise
+    escape into the calibration metrics.
+    """
     if not a or not b:
         return 0.0
     common = set(a) & set(b)
     num = sum(a[t] * b[t] for t in common)
     na = math.sqrt(sum(v * v for v in a.values()))
     nb = math.sqrt(sum(v * v for v in b.values()))
-    return num / (na * nb) if na and nb else 0.0
+    if not na or not nb:
+        return 0.0
+    return max(0.0, min(1.0, num / (na * nb)))
 
 
 def _is_degenerate(s: str) -> bool:

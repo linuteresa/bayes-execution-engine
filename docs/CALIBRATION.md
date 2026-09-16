@@ -145,27 +145,39 @@ title gets `— SIMULATED (not a result)`, and a warning banner goes at the top.
 Numbers and figures: [../eval/results/REPORT.md](../eval/results/REPORT.md).
 
 The result is a split decision, and worth stating plainly because it is not the flattering
-version. The Dirichlet layer **more than halves ECE** against both baselines — expected, since
-it emits a posterior probability while agreement and `exp(mean logprob)` are raw scores. But
-on **AUROC it is not measurably better than plain agreement** (−0.024, CI straddles 0) and is
-*worse* than mean token logprob (−0.072, CI excludes 0). The 125 cells are buying calibration,
-not ranking power.
+version. The Dirichlet layer **more than halves ECE** against both baselines (0.163 vs 0.402
+and 0.454) — expected, since it emits a posterior probability while agreement and
+`exp(mean logprob)` are raw scores. But on **AUROC it is not measurably better than plain
+agreement** (−0.014 [−0.045, 0.018]) and is *worse* than mean token logprob
+(−0.060 [−0.094, −0.028], CI excludes 0). The 125 cells are buying calibration, not ranking
+power.
 
-The per-dataset split is the more useful finding. On TriviaQA: ECE 0.074, AUROC 0.741,
-abstain half → accuracy 0.416 → 0.566. On GSM8K: ECE 0.270, AUROC 0.568 with a CI that
+The per-dataset split is the more useful finding. On TriviaQA: ECE 0.089, AUROC 0.722,
+abstain half → accuracy 0.424 → 0.608. On GSM8K: ECE 0.278, AUROC 0.529 with a CI that
 straddles chance. Self-consistency measures whether the model repeats itself, not whether it
 is right, and a wrong arithmetic method reproduces the same wrong answer on every sample — so
 it looks maximally confident. One averaged AUROC would have reported this as uniformly
 mediocre and hidden the regime boundary, which is why `_per_source` exists.
 
-Closing the loop works and clears its CI: held-out ECE 0.176 → 0.095 after 250 observations
-(Δ −0.081 [−0.100, −0.043]), with mean credible-interval width falling 0.434 → 0.266 as ESS
-grows. Discrimination is unchanged within noise, consistent with the split above.
+Closing the loop moves held-out ECE from 0.162 to 0.107 after 250 observations, with mean
+credible-interval width falling 0.438 → 0.243 as ESS grows. **The ECE gain does not clear its
+interval** (Δ −0.055 [−0.107, 0.012]): the point estimate improves and the learning curve
+falls for most of its length, but at 250 held-out items the run does not establish the effect
+statistically. Report it as suggestive. The interval-vs-ESS shrinkage, by contrast, is a
+direct property of the posterior rather than an estimated effect, and is not in question.
 
-Coverage was 39 of 125 contexts across 500 items, only 12 with 10+ observations. The same rows
-through the latent PCA grid reach 66 of 125 and a slightly better held-out ECE (0.067), which
-is the argument for reducing dimensions rather than enlarging the table, now with numbers
-attached.
+Coverage was 42 of 125 contexts across 500 items, only 12 with 10+ observations. The same rows
+through the latent PCA grid reach 64 of 125 and a better held-out ECE (0.072), which is the
+argument for reducing dimensions rather than enlarging the table, now with numbers attached.
+
+### A note on run-to-run variance
+
+Sampling runs at temperature 0.7, so two runs of the same configuration differ. Between the
+first run and the corrected one, engine AUROC moved 0.660 → 0.629 and the learning-loop ECE
+delta went from excluding zero to straddling it. At n=500 (n=250 held-out) that is ordinary
+noise, and it is the reason the headline claims here are hedged to what a single run supports.
+If you want a number to survive an interview, run it three times with different seeds and
+report the spread.
 
 ## Known limitations
 

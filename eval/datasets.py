@@ -144,13 +144,20 @@ def _load_triviaqa(limit: Optional[int]) -> List[EvalItem]:
             aliases.insert(0, value)
         if not aliases:
             continue
+        # Long aliases are mostly noise and inflate false positives under containment
+        # grading; keep the short, answer-shaped ones.
+        answers = [a for a in dict.fromkeys(aliases) if len(str(a)) <= 60][:20]
+        if not answers:
+            # Every alias was filtered out. Keeping the item would give it no gold
+            # answer at all, so the grader would mark every prediction wrong and the
+            # item would enter the eval as a guaranteed false negative -- contaminating
+            # the very labels the calibration numbers are computed against.
+            continue
         items.append(
             EvalItem(
                 id=str(row.get("question_id") or f"triviaqa-{i:04d}"),
                 question=str(row["question"]),
-                # Long aliases are mostly noise and inflate false positives under
-                # containment grading; keep the short, answer-shaped ones.
-                answers=[a for a in dict.fromkeys(aliases) if len(str(a)) <= 60][:20],
+                answers=answers,
                 grader="contains",
                 difficulty="mixed",
                 source="triviaqa",
