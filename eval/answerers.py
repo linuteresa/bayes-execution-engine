@@ -4,9 +4,12 @@ The harness drives the *real* execution path (``nodes.llm_executor.execute_step_
 which needs an object exposing ``.invoke(prompt)``. Two are provided:
 
 ``LlamaAnswerer``
-    The production path: the local llama.cpp server via ``core.llm.build_llm`` at the
-    executor's sampling temperature. It also captures per-response mean token logprob,
-    which is one of the two baselines the engine has to beat.
+    The production path: a local OpenAI-compatible server (llama.cpp's ``llama-server``,
+    or anything else speaking that API -- ollama included) via ``core.llm.build_llm`` at
+    the executor's sampling temperature. It also captures per-response mean token
+    logprob, which is one of the two baselines the engine has to beat. Servers differ in
+    whether they accept the ``logprobs`` flag at all, so that request degrades on its own
+    rather than taking the run down with it.
 
 ``SimulatedAnswerer``
     A deterministic stand-in that fabricates samples from the item's own gold answer.
@@ -24,10 +27,24 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from dataclasses import dataclass
 from typing import List, Optional
 
 from eval.datasets import EvalItem
+
+# Substrings a server uses when it dislikes the request itself rather than failing for
+# an unrelated reason (a connection drop must still surface as a connection drop).
+_LOGPROB_REJECTION_MARKERS = (
+    "logprob",
+    "unsupported",
+    "unrecognized",
+    "unknown parameter",
+    "invalid_request_error",
+    "bad request",
+    "400",
+    "422",
+)
 
 
 class _Msg:
@@ -35,6 +52,11 @@ class _Msg:
 
     def __init__(self, content: str):
         self.content = content
+
+
+def _looks_like_logprobs_rejection(exc: Exception) -> bool:
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+    return any(marker in text for marker in _LOGPROB_REJECTION_MARKERS)
 
 
 def _mean_logprob(response) -> Optional[float]:
@@ -59,16 +81,17 @@ def _mean_logprob(response) -> Optional[float]:
 # --------------------------------------------------------------------------- live
 @dataclass
 class LlamaAnswerer:
-    """Samples from the local llama.cpp server -- the real, reportable path."""
+    """Samples from the local OpenAI-compatible server -- the real, reportable path."""
 
     temperature: float = 0.7
     request_logprobs: bool = True
-    name: str = "llama.cpp"
+    name: str = "local-openai-compatible"
     is_simulated: bool = False
 
     def __post_init__(self) -> None:
         from core.llm import build_llm
 
+        self._build = build_llm
         self._model = build_llm(
             temperature=self.temperature, logprobs=self.request_logprobs
         )
@@ -80,7 +103,29 @@ class LlamaAnswerer:
         return self
 
     def invoke(self, prompt: str):
-        response = self._model.invoke(prompt)
+        """Sample once, dropping the logprobs request if the server rejects it.
+
+        ``logprobs`` is optional in the OpenAI chat API and servers disagree about it:
+        some llama-server builds ignore it, some ollama versions reject the whole
+        request. Losing one baseline is a far better outcome than losing the run, so the
+        first rejection permanently downgrades this answerer to a plain client. The
+        downgrade is announced, because a silently missing baseline would look like a
+        server that simply returned no logprobs.
+        """
+        try:
+            response = self._model.invoke(prompt)
+        except Exception as exc:  # noqa: BLE001
+            if not self.request_logprobs or not _looks_like_logprobs_rejection(exc):
+                raise
+            print(
+                f"NOTE: the server rejected the logprobs request ({exc.__class__.__name__}); "
+                f"continuing without the mean-token-logprob baseline.",
+                file=sys.stderr,
+            )
+            self.request_logprobs = False
+            self._model = self._build(temperature=self.temperature, logprobs=False)
+            response = self._model.invoke(prompt)
+
         lp = _mean_logprob(response)
         if lp is not None:
             self._logprobs.append(lp)

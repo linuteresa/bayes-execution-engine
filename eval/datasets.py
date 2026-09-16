@@ -107,9 +107,31 @@ def _require_datasets():
     return datasets
 
 
+def _load_first_available(candidates, *, split: str):
+    """Load the first repo id that resolves, reporting every failure if none do.
+
+    Dataset ids get renamed and namespaced over time, and a bare alias that works on one
+    `datasets` version raises on another. Falling through a short candidate list keeps
+    the eval runnable across versions instead of failing on a stale identifier.
+    """
+    datasets_mod = _require_datasets()
+    errors = []
+    for repo_id, config in candidates:
+        try:
+            if config is None:
+                return datasets_mod.load_dataset(repo_id, split=split)
+            return datasets_mod.load_dataset(repo_id, config, split=split)
+        except Exception as exc:  # noqa: BLE001 - try the next id, report all at the end
+            errors.append(f"  {repo_id}: {exc.__class__.__name__}: {exc}")
+    raise RuntimeError(
+        "could not load any candidate dataset id:\n" + "\n".join(errors)
+    )
+
+
 def _load_triviaqa(limit: Optional[int]) -> List[EvalItem]:
-    ds = _require_datasets().load_dataset(
-        "mandarjoshi/trivia_qa", "rc.nocontext", split="validation"
+    ds = _load_first_available(
+        [("mandarjoshi/trivia_qa", "rc.nocontext"), ("trivia_qa", "rc.nocontext")],
+        split="validation",
     )
     if limit:
         ds = ds.select(range(min(limit, len(ds))))
@@ -138,7 +160,12 @@ def _load_triviaqa(limit: Optional[int]) -> List[EvalItem]:
 
 
 def _load_gsm8k(limit: Optional[int]) -> List[EvalItem]:
-    ds = _require_datasets().load_dataset("gsm8k", "main", split="test")
+    # `datasets` >= 5 requires namespaced repo ids, so the bare "gsm8k" alias that older
+    # docs and tutorials use now fails outright. Try the canonical id first and keep the
+    # legacy ones as fallbacks for older `datasets` installs.
+    ds = _load_first_available(
+        [("openai/gsm8k", "main"), ("gsm8k", "main")], split="test"
+    )
     if limit:
         ds = ds.select(range(min(limit, len(ds))))
     items = []
@@ -161,7 +188,7 @@ def _load_gsm8k(limit: Optional[int]) -> List[EvalItem]:
 
 
 def _load_simpleqa(limit: Optional[int]) -> List[EvalItem]:
-    ds = _require_datasets().load_dataset("basicv8vc/SimpleQA", split="test")
+    ds = _load_first_available([("basicv8vc/SimpleQA", None)], split="test")
     if limit:
         ds = ds.select(range(min(limit, len(ds))))
     return [

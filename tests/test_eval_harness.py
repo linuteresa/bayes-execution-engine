@@ -92,3 +92,50 @@ def test_custom_jsonl_items_are_supported(tmp_path):
     assert len(items) == 1
     assert isinstance(items[0], EvalItem)
     assert items[0].answers == ["4"]
+
+
+def test_logprobs_rejection_downgrades_instead_of_failing(monkeypatch):
+    """A server that refuses the logprobs flag must cost the baseline, not the run."""
+    from eval import answerers
+
+    class _Boom:
+        def __init__(self, logprobs):
+            self.logprobs = logprobs
+
+        def invoke(self, _prompt):
+            if self.logprobs:
+                raise RuntimeError("400 Bad Request: unknown parameter 'logprobs'")
+            return type("M", (), {"content": "an answer", "response_metadata": {}})()
+
+    monkeypatch.setattr(answerers, "build_llm", None, raising=False)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "core.llm",
+        type("M", (), {"build_llm": staticmethod(lambda temperature=0.0, logprobs=False: _Boom(logprobs))}),
+    )
+
+    answerer = answerers.LlamaAnswerer()
+    assert answerer.request_logprobs is True
+    assert answerer.invoke("hi").content == "an answer"
+    assert answerer.request_logprobs is False       # permanently downgraded
+    assert answerer.mean_logprob() is None
+
+
+def test_unrelated_errors_still_propagate(monkeypatch):
+    """A connection failure must not be mistaken for a logprobs rejection."""
+    from eval import answerers
+
+    class _Down:
+        def __init__(self, logprobs):
+            self.logprobs = logprobs
+
+        def invoke(self, _prompt):
+            raise ConnectionError("Connection refused")
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "core.llm",
+        type("M", (), {"build_llm": staticmethod(lambda temperature=0.0, logprobs=False: _Down(logprobs))}),
+    )
+    with pytest.raises(ConnectionError):
+        answerers.LlamaAnswerer().invoke("hi")
