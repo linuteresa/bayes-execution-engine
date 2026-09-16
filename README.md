@@ -6,7 +6,12 @@ served behind an **async API**, running entirely on a **local LLM** via
 
 Standard agents "guess again" on conflicting data and loop or hallucinate. This engine
 decouples *planning* from *doing*, and gates each step's confidence on a **real Bayesian
-update** driven by how consistently the model answers, calibrated uncertainty, not a vibe.
+update** driven by how consistently the model answers.
+
+Whether that confidence is actually *calibrated* is a falsifiable claim, so the repo ships
+the harness that tests it — reliability diagrams, ECE, Brier, AUROC and risk-coverage
+against two baselines the Bayesian layer has to beat. See
+**[Calibration](#calibration-measuring-the-confidence-claim)**.
 
 ---
 
@@ -33,7 +38,13 @@ much the samples agree (self-consistency, Wang et al. 2022). From that it derive
 ordinal signals — `DataQuality` (agreement), `TaskStatus` (answerability), `ToolReliability`
 (answer dispersion) — and feeds them to the Bayesian engine. The medoid (consensus) answer
 flows on; the agreement drives confidence. So conflicts fire on **genuine model
-uncertainty**, not keywords. No model? It falls back to a deterministic mock. Detail:
+uncertainty**, not keywords.
+
+**One evidence path.** With no model the executor swaps in a deterministic *mock tool* that
+sometimes returns conflicting readings — but its samples are measured exactly like a live
+model's, so the offline suite exercises the real machinery. The older keyword extractor
+(`core/signals.py`) is no longer on the agent path; it survives as an explicit opt-in
+(`EXECUTOR_EVIDENCE=keywords`) for deployments with no sampling budget. Detail:
 [docs/EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md).
 
 ```bash
@@ -80,6 +91,51 @@ not growing the table. Full derivation: [docs/BAYESIAN_DESIGN.md](docs/BAYESIAN_
 
 ---
 
+## Calibration: measuring the confidence claim
+
+A confidence number is only worth the evidence behind it, so `eval/` runs the **real
+execution path** over questions with gold answers and logs one row per item — the evidence
+triple, the continuous signals behind it, engine confidence, credible interval, ESS, the
+medoid answer, and correctness. From those rows it produces a reliability diagram and ECE,
+Brier with a bootstrap CI, AUROC of confidence as a correctness detector, and a
+risk-coverage curve (*abstain on the least-confident 20%, keep this much accuracy*).
+
+```bash
+pip install -r requirements.txt -r requirements-eval.txt
+llama-server -m ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080
+
+python -m eval.run_eval --model llama --dataset hf:triviaqa+hf:gsm8k --limit 250
+python -m eval.run_eval --model sim  --dataset bundled      # offline, no model needed
+```
+
+Two baselines the Dirichlet layer has to beat, compared by **paired bootstrap** on the same
+items: raw self-consistency agreement on its own, and mean token logprob. If the 125-cell
+table doesn't beat plain agreement, that is a result too, and the report says so in those
+words — `test_verdict_calls_out_a_losing_engine` pins that behaviour.
+
+**Status: the harness is built, tested and reproducible; the headline numbers are not in
+this README yet, because they require a run against a real local model.** Nothing here
+reports a calibration figure it hasn't measured. `eval/results/example-simulated/` shows the
+output format using a synthetic answerer that is *told the gold answer* — it is banner-
+stamped `SIMULATED (not a result)` and exists only to prove the pipeline runs end to end.
+
+### Closing the loop
+
+`engine.observe()` is now actually called. `eval/learning.py` splits the logged rows
+train/test, feeds the train half back through the conjugate update, and scores prior-only
+against posterior on **held-out** data, plus credible-interval width against ESS. That turns
+"conjugacy gives O(1) online updates and free credible intervals" from an architectural
+assertion into a measured one.
+
+It also reports **context coverage**: how many of the 125 cells a run ever visits. When that
+number is small, unvisited cells sit at their prior forever — the honest empirical argument
+for reducing dimensionality instead of growing the table, which is why the same rows are also
+run through `scaling/latent_bayes.py` for a like-for-like comparison.
+
+Full method, metric definitions and limitations: **[docs/CALIBRATION.md](docs/CALIBRATION.md)**.
+
+---
+
 ## Scaling to 10,000+ states
 
 Discretising 8 raw signals into 5 bins is `5⁸ = 390,625` contexts — unpopulatable. Strategy:
@@ -91,7 +147,10 @@ scaling/latent_bayes.py`:
 |---|---|---|---|---|---|
 | 390,625 | 125 | 3,125× | 0.89 | 0.64 | 0.22 |
 
-Detail: [docs/SCALING.md](docs/SCALING.md).
+The table above is a synthetic demo of the mechanism. The same pipeline is now also fitted
+on **real eval rows** (the executor's six continuous signals) and scored against the
+hand-designed 125-cell grid on identical held-out items — see the coverage section of the
+calibration report. Detail: [docs/SCALING.md](docs/SCALING.md).
 
 ---
 
@@ -129,22 +188,27 @@ Detail: [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md).
 
 ## Testing
 
-**60 unit tests** (conjugate updates, prior monotonicity, self-consistency, JSON parsing,
-DAG routing, scaling, job store). Run `pytest`. The Bayesian core is deterministic, so most
-tests need no model.
+**119 unit tests** (conjugate updates, prior monotonicity, self-consistency, evidence-path
+routing, calibration metrics, grading, the learning loop, JSON parsing, DAG routing, scaling,
+job store). Run `pytest`. The Bayesian core is deterministic and the eval has an offline
+answerer, so the whole suite — including the full calibration pipeline end to end — runs with
+no model and no network.
 
 ---
 
 ## Roadmap
 
+- ~~**Calibration eval** — reliability diagrams / ECE to prove confidences are calibrated.~~
+  Built: `eval/`, [docs/CALIBRATION.md](docs/CALIBRATION.md). Headline numbers pending a run
+  against a live model.
+- ~~**Online CPT learning** — feed `(evidence, outcome)` back via `engine.observe`.~~ Built:
+  `eval/learning.py` fits the posterior on a train split and scores it held-out.
 - **Semantic agreement** — swap bag-of-words cosine for embeddings/NLI (interface ready).
-- **Online CPT learning** — feed `(evidence, outcome)` back via `engine.observe` so the
-  posterior adapts to a deployment.
+  Worth doing *after* the calibration run, so the gain can be measured rather than asserted.
+- **Confidence-driven control** — use the credible interval to re-plan / escalate / ask.
 - **Real tools behind the executor** — typed tools/MCP; drive conflict from multi-source
   disagreement.
-- **Confidence-driven control** — use the credible interval to re-plan / escalate / ask.
 - **Broker-backed scaling** — Kafka/RabbitMQ + Celery + shared checkpointer.
-- **Calibration eval** — reliability diagrams / ECE to prove confidences are calibrated.
 
 ---
 
@@ -152,12 +216,13 @@ tests need no model.
 
 ```
 bayesian_engine/bayes_engine.py   Dirichlet–Multinomial conjugate engine
-core/signals.py | json_utils.py   evidence mapping | tolerant JSON parsing
+eval/                             calibration harness: metrics, learning loop, report
+core/signals.py | json_utils.py   legacy keyword evidence (opt-in) | tolerant JSON parsing
 core/graph.py | llm.py | telemetry.py   LangGraph wiring | llama.cpp client | logging
 nodes/llm_executor.py             self-consistency execution + evidence
 nodes/                            planner / executor / replanner
 scaling/latent_bayes.py           PCA latent-space scaling PoC
 service/api.py | persistence/     async API | job store + checkpointer
 demo.py                           confident vs ambiguous confidence demo
-tests/ (60) | docs/               pytest suite | design deep-dives
+tests/ (119) | docs/              pytest suite | design deep-dives
 ```
