@@ -1,57 +1,103 @@
-# Quickstart: Run & Verify
+# Quickstart
 
-The Bayesian core is deterministic, so you can prove it works with **no model running**.
+Use Python 3.10+; Python 3.14 was used for local review verification. Requirements for older
+Python versions are compatibility branches selected by the CI matrix, not a locally reproduced matrix.
 
-## 1. Start the local model
+## Install and verify offline
 
-```powershell
-docker run --rm -it -e LLAMA_CACHE=/models -p 127.0.0.1:8080:8080 -v C:\llama_models:/models ^
-  ghcr.io/ggml-org/llama.cpp:server -hf Qwen/Qwen2.5-3B-Instruct-GGUF:Q4_K_M ^
-  --host 0.0.0.0 --port 8080 -c 8192
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env
+pytest
+ruff check .
+python demo.py --sim
 ```
 
-The app defaults to `http://localhost:8080/v1`, so no extra config.
+On Windows, activate `.venv\Scripts\Activate.ps1` in PowerShell. The offline demo uses a
+scripted sampler and proves the mechanism runs; it does not establish model calibration.
+The normal CLI/API returns an error when the model is unavailable.
 
-## 2. Run
+## Start inference
 
-```powershell
-pip install -r requirements.txt
-python main.py "Compare REST and gRPC and when to use each."   # CLI
-python app.py                                                  # web UI :5000
-uvicorn service.api:app --port 8000                            # async API
+Place your GGUF weights under `./models/`, then run:
+
+```bash
+llama-server -m ./models/model.gguf --host 127.0.0.1 --port 8080 -c 8192
+python main.py "Compare REST and gRPC and when to use each."
+uvicorn service.api:app --host 127.0.0.1 --port 8000
 ```
 
-Async API: `POST /jobs {question}` → `{job_id}` → poll `GET /jobs/{job_id}`.
+Wait for the model to finish loading before submitting jobs. `.env` is loaded by the API,
+CLI and Flask entrypoints. `LLAMA_MODEL` is the request label; the loaded server weights
+must be recorded separately for a reproducible experiment.
 
-## 3. Verify without a model (the real proof)
-
-```powershell
-pytest                                                          # 119 passed (a few skip without pgmpy/sklearn)
-
-python demo.py --sim                                            # confident vs ambiguous, side by side
-
-python -c "from bayesian_engine.bayes_engine import resolve_conflict; import json; print(json.dumps(resolve_conflict({'TaskStatus':4,'DataQuality':4,'ToolReliability':4})))"
+```bash
+curl -s http://localhost:8000/jobs -H 'Content-Type: application/json' \
+  -d '{"question":"Explain RSA and its assumptions.","thread_id":"demo-session"}'
+curl -s http://localhost:8000/jobs/JOB_ID
+curl -s http://localhost:8000/jobs/JOB_ID/feedback \
+  -H 'Content-Type: application/json' -d '{"correct":true}'
 ```
 
-Expected from the one-liner: `state AMBIGUOUS`, `confidence ≈ 0.43`, plus a credible interval
-and effective sample size. Run it twice — **identical** (the v0 code returned random numbers;
-making it deterministic and data-driven is the headline fix). All-zeros evidence ⇒ `CERTAIN`.
+Feedback requires a successful finished job and accepts one strict boolean verdict.
+If `API_KEY` is configured, add `-H 'Authorization: Bearer TOKEN'`. Callers share jobs and
+learning state; this token is not per-user authorization. The Flask UI (`python app.py`,
+localhost:5000) is a synchronous source-checkout demo and does not use the async job queue.
 
-`python scaling/latent_bayes.py` → 390,625 naive states compress to 125 (`3,125×`), latent
-accuracy 0.64 vs 0.22 baseline.
+## Persistence
 
-## 4. A full run
+Defaults: `JOB_STORE=sqlite`, `JOB_DB_PATH=./data/jobs.sqlite3`, `CHECKPOINTER=memory`.
+SQLite persists jobs and aggregate feedback counts. Lost in-memory checkpoints cause a
+recovered unfinished job to restart from its original prompt. Redis/Postgres checkpoints
+allow recovery from a committed graph state. Missing published persistent checkpoints are
+errors; stale attempts cannot publish a new recovery reference or completion.
 
-`python main.py "..."` runs Planner → Executor (samples the model and measures agreement) →
-Replanner, then prints the final answer, steps executed, and a confidence score. Confidence is
-earned: consistent answers score high; ambiguous prompts scatter, log a `bayes.conflict_resolved`
-event, and score low. Costs ~`EXECUTOR_SAMPLES`× tokens per step.
+For Redis, install `requirements-redis.txt` and configure both `JOB_STORE=redis` and
+`CHECKPOINTER=redis` against Redis with JSON/Search support. For Postgres checkpoints,
+install `requirements-postgres.txt`, set `CHECKPOINTER=postgres` and `POSTGRES_DSN`, and
+keep a supported job store. Old Redis `job:*` records and `.npy` feedback counts require an
+explicit migration; startup does not import them into the new transactional store.
+
+## Containers
+
+```bash
+docker compose up --build
+# Or, stop the default engine and use the Redis profile:
+docker compose --profile redis up --build llama redis engine-redis
+```
+
+Set `LLAMA_MODEL_FILE` to the filename under `./models/`. The API is published on localhost
+only. SQLite and Redis each have named data volumes. Use verified image digests for a
+repeatable deployment and back up data separately. Container startup does not establish
+model readiness; `/health` only reports that the API is running.
+
+## Evaluate
+
+```bash
+pip install -r requirements-eval.txt
+python -m eval.run_eval --model sim --out /tmp/bayes-sim
+python -m eval.run_eval --model llama --dataset hf:triviaqa+hf:gsm8k \
+  --limit 250 --keep-samples --out eval/results/new-run
+# Continue the same interrupted collection with identical arguments and --resume.
+python -m eval.run_eval --rows eval/results/embeddings/rows.jsonl --out /tmp/bayes-analysis
+```
+
+Collection refuses existing output without `--resume` or explicit `--overwrite`.
+Historical real-model rows validate their saved single-step scores only. They predate the
+current evidence/grading logic and do not validate final-response confidence.
 
 ## Troubleshooting
 
-| Symptom | Fix |
+| Symptom | Action |
 |---|---|
-| `Connection refused :8080` | The model container (step 1) isn't running. |
-| `Steps Executed: 0` | Model returned malformed planner JSON; the parser recovers in most cases — retry or use a larger GGUF. Engine logic is fine (verify via §3). |
-| `pytest` shows 2 skipped | Optional `pgmpy`/`langgraph` not installed — expected. |
-| Want durable state | `JOB_STORE=redis`, `CHECKPOINTER=redis` (see `.env.example`). |
+| `llm_unavailable` | Start the configured model server and check its URL/readiness. |
+| `invalid_model_output` | Inspect model JSON/schema failures; try a model that follows the required format. |
+| `execution_timeout` | Reduce the plan/sample budget or explicitly adjust the job/request limits. |
+| HTTP 429 | The durable pending-job capacity is full; retry after the supplied delay. |
+| Saver import/setup error | Install the matching optional requirements and verify the backend service/modules. |
+| Lost mid-run progress after restart | Use a persistent checkpointer; memory checkpoints cannot survive process loss. |
+| OTLP startup error | Install `requirements-telemetry.txt` and configure an OTLP/gRPC collector. |
+
+See [system design](docs/SYSTEM_DESIGN.md) for limits, recovery and deployment boundaries.

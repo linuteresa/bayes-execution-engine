@@ -51,7 +51,7 @@ class Split:
 def split_rows(
     rows: Sequence[EvalRow], *, test_fraction: float = 0.5, seed: int = 0
 ) -> Split:
-    """Shuffle and split, stratified by correctness.
+    """Shuffle and split question groups, approximately stratified by correctness.
 
     Stratifying keeps the train and test halves at comparable accuracy; an unstratified
     split on a few hundred items can easily hand the test half most of the wrong
@@ -59,19 +59,31 @@ def split_rows(
     """
     if not 0.0 < test_fraction < 1.0:
         raise ValueError("test_fraction must be in (0, 1)")
+    # Repeated questions with different IDs must stay in the same half, even when
+    # separate samplings gave different correctness labels. Splitting observations
+    # independently would let the posterior train on a held-out question.
+    groups: Dict[str, List[EvalRow]] = {}
+    for row in rows:
+        key = " ".join(row.question.casefold().split())
+        groups.setdefault(key, []).append(row)
     rng = random.Random(seed)
     train: List[EvalRow] = []
     test: List[EvalRow] = []
     for label in (0, 1):
-        bucket = [r for r in rows if r.correct == label]
+        bucket = [
+            group for group in groups.values()
+            if int(sum(r.correct for r in group) / len(group) >= 0.5) == label
+        ]
         rng.shuffle(bucket)
-        cut = int(round(len(bucket) * (1.0 - test_fraction)))
-        train.extend(bucket[:cut])
-        test.extend(bucket[cut:])
+        target = sum(len(group) for group in bucket) * (1.0 - test_fraction)
+        sizes = np.cumsum([0, *(len(group) for group in bucket)])
+        cut = min(range(len(sizes)), key=lambda i: (abs(sizes[i] - target), i % 2, i))
+        train.extend(row for group in bucket[:cut] for row in group)
+        test.extend(row for group in bucket[cut:] for row in group)
     rng.shuffle(train)
     rng.shuffle(test)
     if not train or not test:
-        raise ValueError("split produced an empty half; need more rows")
+        raise ValueError("split produced an empty half; need more distinct questions")
     return Split(train=train, test=test)
 
 

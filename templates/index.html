@@ -220,7 +220,8 @@
                 <textarea
                     id="question"
                     name="question"
-                    placeholder="e.g., What are the active users in the system? What high-priority tasks are assigned?"
+                    placeholder="e.g., Compare REST and gRPC and when to use each."
+                    maxlength="{{ max_prompt_chars }}"
                     required
                 ></textarea>
             </div>
@@ -247,7 +248,7 @@
                 <div class="result-label">Execution Stats</div>
                 <div class="result-value">
                     <div>Steps Executed: <strong id="stepsCount"></strong></div>
-                    <div>Confidence Score: <span class="confidence" id="confidenceScore"></span></div>
+                    <div>Weakest step confidence: <span class="confidence" id="confidenceScore"></span></div>
                 </div>
             </div>
 
@@ -298,6 +299,7 @@
                 }
 
                 const data = await response.json();
+                if (data.error) throw new Error(data.error);
 
                 // Display results
                 responseText.textContent = data.response;
@@ -307,14 +309,19 @@
                 // Show steps if any
                 if (data.past_steps && data.past_steps.length > 0) {
                     stepsSection.style.display = 'block';
-                    stepsList.innerHTML = data.past_steps
-                        .map((step, i) => `
-                            <div class="step">
-                                <strong>Step ${i + 1}:</strong> ${step[0]}<br>
-                                <small>Result: ${step[1]}</small>
-                            </div>
-                        `)
-                        .join('');
+                    stepsList.replaceChildren();
+                    data.past_steps.forEach((step, i) => {
+                        const row = document.createElement('div');
+                        row.className = 'step';
+                        const title = document.createElement('strong');
+                        title.textContent = `Step ${i + 1}: `;
+                        const task = document.createElement('span');
+                        task.textContent = String(step[0]);
+                        const detail = document.createElement('small');
+                        detail.textContent = `Result: ${step[1]}`;
+                        row.append(title, task, document.createElement('br'), detail);
+                        stepsList.append(row);
+                    });
                 } else {
                     stepsSection.style.display = 'none';
                 }

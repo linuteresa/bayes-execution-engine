@@ -11,6 +11,7 @@ for a calibration result:
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -156,8 +157,9 @@ def _verdict(results: dict) -> List[str]:
     acc_cov = engine.get("accuracy_at_coverage")
     abstain = engine.get("abstain_fraction")
     if None not in (acc_full, acc_cov, abstain):
+        change = "lifts" if acc_cov > acc_full else "reduces" if acc_cov < acc_full else "leaves"
         lines.append(
-            f"- Abstaining on the least-confident {abstain:.0%} lifts accuracy on the "
+            f"- Abstaining on the least-confident {abstain:.0%} {change} accuracy on the "
             f"remainder from {acc_full:.3f} to {acc_cov:.3f}."
         )
 
@@ -277,6 +279,7 @@ def _learning_section(study: dict) -> List[str]:
 def _coverage_section(study: dict) -> List[str]:
     cov = study.get("coverage_all") or {}
     visited = cov.get("contexts_visited", 0)
+    train_visited = (study.get("coverage_train") or {}).get("contexts_visited", 0)
     total = cov.get("n_contexts", 125)
     lines = [
         "## Context coverage — is a 125-cell table the right size?",
@@ -310,10 +313,10 @@ def _coverage_section(study: dict) -> List[str]:
             f"| Hand-designed 125-cell grid | {_fmt((study.get('posterior') or {}).get('ece'))} | "
             f"{_fmt_interval((study.get('posterior') or {}).get('brier'))} | "
             f"{_fmt_interval((study.get('posterior') or {}).get('auroc'))} | "
-            f"{visited}/{total} |",
+            f"{train_visited}/{total} (train) |",
             f"| Latent PCA grid | {_fmt(metrics.get('ece'))} | "
             f"{_fmt_interval(metrics.get('brier'))} | {_fmt_interval(metrics.get('auroc'))} | "
-            f"{latent.get('latent_contexts_visited')}/{latent.get('latent_contexts')} |",
+            f"{latent.get('latent_contexts_visited')}/{latent.get('latent_contexts')} (train) |",
             "",
         ]
     return lines
@@ -338,11 +341,39 @@ def render_report(results: dict) -> str:
         title = "Calibration report — UNVERIFIED PROVENANCE"
     else:
         title = "Calibration report"
+    if meta.get("historical_scores") and not simulated and not unknown_provenance:
+        title += " — historical single-step scores"
     lines: List[str] = [f"# {title}", ""]
     if simulated:
         lines += [SIMULATED_BANNER, ""]
     elif unknown_provenance:
         lines += [UNKNOWN_PROVENANCE_BANNER, ""]
+
+    lines += [
+        "**Scope: single-step answer confidence.** Each question is evaluated as one "
+        "execution step. These metrics do not validate confidence in a multi-step final "
+        "response, the replanner, or the agent's end-to-end stopping policy.",
+        "",
+    ]
+    if meta.get("analysis_only"):
+        lines += [
+            "**Analysis only:** this report recomputes metrics from saved answers and "
+            "labels. Stored confidence, evidence, samples and correctness labels are "
+            "preserved; no model or embedding requests were made. Risk-coverage now "
+            "uses expected uniform selection within equal-confidence groups.",
+            "",
+        ]
+    if meta.get("historical_scores"):
+        lines += [
+            "**Historical acquisition:** these rows predate versioned experiment "
+            "manifests and the current evidence/grading implementation. Missing sampling "
+            "and agreement settings remain unknown. Results characterize the saved "
+            "scores and labels; they do not establish calibration of the current executor. "
+            "The learning study refits the current engine on the historical evidence.",
+            "",
+        ]
+    if meta.get("collection_status") == "partial":
+        lines += ["**Partial collection:** fewer rows are present than the experiment planned.", ""]
 
     lines += [
         "## Provenance",
@@ -357,6 +388,9 @@ def render_report(results: dict) -> str:
         f"| Items | {meta.get('n_items', dataset.get('n_items', 0))} |",
         f"| Samples per item | {meta.get('n_samples_per_item', 0)} |",
         f"| Agreement measure | `{meta.get('similarity', 'unknown')}` |",
+        f"| Provenance schema | {meta.get('schema_version', 'legacy / incomplete')} |",
+        f"| Experiment ID | `{meta.get('experiment_id', 'unknown')}` |",
+        f"| Provenance status | {meta.get('provenance_status', 'unknown')} |",
         "",
         "Composition: "
         + ", ".join(f"{k} × {v}" for k, v in (dataset.get("by_difficulty") or {}).items())
@@ -412,26 +446,61 @@ def render_report(results: dict) -> str:
         for label, rel in figures.items():
             lines += [f"**{label}**", "", f"![{label}]({rel})", ""]
 
+    analysis = results.get("analysis") or {}
+    source_rows = analysis.get("source_rows") or meta.get("source_rows")
+    if source_rows:
+        command = f"python -m eval.run_eval --rows {shlex.quote(str(source_rows))}"
+        for flag, key in (("--bins", "bins"), ("--bootstrap", "bootstrap"),
+                          ("--seed", "seed"), ("--abstain", "abstain_fraction"),
+                          ("--test-fraction", "test_fraction")):
+            if key in analysis:
+                command += f" {flag} {analysis[key]}"
+        if analysis.get("learning") is False:
+            command += " --no-learning"
+    else:
+        command = (
+            f"python -m eval.run_eval --model {'sim' if simulated else 'llama'} "
+            f"--dataset {shlex.quote(str(meta.get('dataset_spec', 'bundled')))} "
+            f"--samples {meta.get('n_samples_per_item', 4)}"
+        )
+        sampling = meta.get("sampling") or {}
+        for flag, value in (("--temperature", sampling.get("temperature")),
+                            ("--seed", sampling.get("seed")),
+                            ("--limit", meta.get("limit_per_component"))):
+            if value is not None:
+                command += f" {flag} {value}"
+        if meta.get("keep_samples"):
+            command += " --keep-samples"
+    measure = str(meta.get("similarity", "unknown"))
+    if measure.startswith("embeddings:"):
+        agreement_limit = (
+            "- Agreement used embedding cosine. Semantic similarity can merge factual "
+            "contradictions, and the historical embedding service/configuration may be "
+            "incompletely recorded."
+        )
+    elif measure == "word-overlap":
+        agreement_limit = (
+            "- Agreement used word-overlap cosine; paraphrases can read as disagreement "
+            "and contradictions with similar wording can look consistent."
+        )
+    else:
+        agreement_limit = "- The acquisition agreement configuration is unknown for these legacy rows."
     lines += [
         "## How to reproduce",
         "",
         "```bash",
-        f"python -m eval.run_eval --model {'sim' if simulated else 'llama'} "
-        f"--dataset {meta.get('dataset_spec', 'bundled')} "
-        f"--samples {meta.get('n_samples_per_item', 4)}",
+        command,
         "```",
         "",
         "## Limitations",
         "",
-        "- Agreement is bag-of-words cosine, so paraphrases read as disagreement and the "
-        "confidence signal is pessimistic on verbose answers.",
+        agreement_limit,
         "- Grading is normalized alias containment / numeric match: a correct answer phrased "
         "unusually can be scored wrong, which shows up as apparent overconfidence.",
         "- Self-consistency measures agreement, not truth. A model that is confidently and "
         "consistently wrong scores high here by construction.",
-        "- Risk-coverage ties are broken by row order, so the curve is slightly pessimistic "
-        "when many items share a confidence — which happens whenever the evidence is a "
-        "coarse 5-level ordinal.",
+        "- Intermediate risk-coverage points assume uniform random selection within a "
+        "boundary tie group. A confidence threshold alone cannot separate equal scores.",
         "",
     ]
     return "\n".join(lines) + "\n"

@@ -31,6 +31,8 @@ def _as_arrays(scores: Sequence[float], correct: Sequence[int]) -> Tuple[np.ndar
     y = np.asarray(correct, dtype=float)
     if s.shape != y.shape:
         raise ValueError(f"scores {s.shape} and correct {y.shape} must align")
+    if s.ndim != 1:
+        raise ValueError("scores and correct must be one-dimensional")
     if s.size == 0:
         raise ValueError("empty evaluation set")
     if not np.all(np.isfinite(s)):
@@ -113,7 +115,7 @@ def expected_calibration_error(
 ) -> float:
     """ECE: count-weighted mean absolute gap between confidence and accuracy.
 
-    ``ECE = sum_b (n_b / N) * |acc_b - conf_b|``. 0 is perfect; 0.5 is the worst a
+    ``ECE = sum_b (n_b / N) * |acc_b - conf_b|``. 0 is perfect; 1 is the worst a
     binary predictor can do. Sensitive to ``n_bins`` -- report the bin count alongside.
     """
     s, y = _as_arrays(scores, correct)
@@ -195,8 +197,11 @@ class RiskCoverageCurve:
         """Accuracy retained when answering only the most-confident ``coverage`` share."""
         if not 0.0 < coverage <= 1.0:
             raise ValueError("coverage must be in (0, 1]")
-        best = min(self.points, key=lambda p: abs(p.coverage - coverage))
-        return best.accuracy
+        # Interpolate expected correct counts, rather than accuracies, when a requested
+        # coverage falls between observations. This also handles fractional tie groups.
+        xs = [0.0, *(p.coverage for p in self.points)]
+        correct_mass = [0.0, *(p.coverage * p.accuracy for p in self.points)]
+        return float(np.interp(coverage, xs, correct_mass) / coverage)
 
 
 def risk_coverage(scores: Sequence[float], correct: Sequence[int]) -> RiskCoverageCurve:
@@ -206,13 +211,28 @@ def risk_coverage(scores: Sequence[float], correct: Sequence[int]) -> RiskCovera
     single most confident item" to "answer everything". This is the business-legible
     view: *abstain on the least-confident X%, keep accuracy Y on the rest*.
 
-    Ties are broken by the input order via a stable sort, so the curve is deterministic
-    for a given row ordering but slightly pessimistic when many scores are identical.
+    Within an equal-score group, the expected number correct is its empirical accuracy
+    times the number retained. This is the expectation over uniform random tie breaking,
+    so changing row order cannot create or remove an abstention gain. Intermediate
+    coverage points assume random selection within the boundary tie group; a confidence
+    threshold alone can only include or exclude the entire group.
     """
     s, y = _as_arrays(scores, correct)
-    order = np.argsort(-s, kind="mergesort")  # stable: deterministic under ties
-    y_sorted = y[order]
-    cum_acc = np.cumsum(y_sorted) / np.arange(1, y.size + 1)
+    order = np.argsort(-s)
+    sorted_s, sorted_y = s[order], y[order]
+    expected_correct = np.empty(y.size, dtype=float)
+    start, before = 0, 0.0
+    while start < y.size:
+        end = start + 1
+        while end < y.size and sorted_s[end] == sorted_s[start]:
+            end += 1
+        group_correct = float(sorted_y[start:end].sum())
+        expected_correct[start:end] = before + np.arange(1, end - start + 1) * (
+            group_correct / (end - start)
+        )
+        before += group_correct
+        start = end
+    cum_acc = expected_correct / np.arange(1, y.size + 1)
     points = [
         RiskCoveragePoint(coverage=float(k + 1) / y.size, accuracy=float(cum_acc[k]))
         for k in range(y.size)
@@ -236,6 +256,8 @@ class Interval:
 
 
 def _bootstrap_indices(n: int, n_boot: int, seed: int) -> np.ndarray:
+    if n_boot < 1:
+        raise ValueError("n_boot must be >= 1")
     rng = np.random.default_rng(seed)
     return rng.integers(0, n, size=(n_boot, n))
 
@@ -255,6 +277,8 @@ def bootstrap_ci(
     about is "would this number hold on another draw of questions?".
     """
     s, y = _as_arrays(scores, correct)
+    if not 0.0 < mass < 1.0:
+        raise ValueError("mass must be in (0, 1)")
     point = float(statistic(s, y))
     draws = []
     for idx in _bootstrap_indices(s.size, n_boot, seed):
@@ -288,6 +312,8 @@ def bootstrap_diff(
     """
     a, y = _as_arrays(scores_a, correct)
     b, _ = _as_arrays(scores_b, correct)
+    if not 0.0 < mass < 1.0:
+        raise ValueError("mass must be in (0, 1)")
     point = float(statistic(a, y) - statistic(b, y))
     draws = []
     for idx in _bootstrap_indices(a.size, n_boot, seed):
@@ -314,6 +340,8 @@ def evaluate_scores(
 ) -> Dict[str, object]:
     """Full metric rollup for one confidence signal."""
     s, y = _as_arrays(scores, correct)
+    if not 0.0 <= abstain_fraction < 1.0:
+        raise ValueError("abstain_fraction must be in [0, 1)")
     curve = risk_coverage(s, y)
     coverage = max(1.0 - abstain_fraction, 1.0 / s.size)
     # Deciles of the real row-level curve. The reliability bins cannot stand in for
@@ -338,6 +366,7 @@ def evaluate_scores(
             lambda a, b: auroc(a, b), s, y, n_boot=n_boot, seed=seed
         ).as_dict(),
         "aurc": curve.aurc,
+        "risk_coverage_ties": "expected_uniform_selection_within_equal_scores",
         "accuracy_full_coverage": curve.full_accuracy,
         "abstain_fraction": abstain_fraction,
         "accuracy_at_coverage": curve.accuracy_at_coverage(coverage),

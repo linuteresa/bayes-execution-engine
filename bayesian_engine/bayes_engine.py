@@ -40,8 +40,11 @@ informative prior plus whatever evidence has been observed.
 from __future__ import annotations
 
 import os
+import tempfile
+import threading
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, Optional, Tuple
+from numbers import Integral, Real
+from typing import Callable, Dict, Iterable, Optional, Tuple
 
 import numpy as np
 
@@ -56,17 +59,34 @@ N_STATES = 5
 N_CONTEXTS = N_STATES ** len(PARENTS)  # 125
 
 
+def _index(value: int, size: int, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral):
+        raise ValueError(f"{name} must be an integer in 0..{size - 1}")
+    if not 0 <= value < size:
+        raise ValueError(f"{name} {value} out of range 0..{size - 1}")
+    return int(value)
+
+
+def _finite_parameter(value: float, name: str, *, positive: bool = False) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise ValueError(f"{name} must be a finite real number")
+    value = float(value)
+    if not np.isfinite(value) or (value <= 0 if positive else value < 0):
+        raise ValueError(f"{name} must be finite and {'positive' if positive else 'nonnegative'}")
+    return value
+
+
 def context_index(task: int, data: int, tool: int) -> int:
     """Map a (TaskStatus, DataQuality, ToolReliability) triple to a flat 0..124 index."""
-    for name, v in zip(PARENTS, (task, data, tool), strict=False):
-        if not 0 <= v < N_STATES:
-            raise ValueError(f"{name} state {v} out of range 0..{N_STATES - 1}")
+    task, data, tool = (
+        _index(v, N_STATES, name) for name, v in zip(PARENTS, (task, data, tool), strict=True)
+    )
     return task * (N_STATES ** 2) + data * N_STATES + tool
 
 
 def context_triple(idx: int) -> Tuple[int, int, int]:
     """Inverse of :func:`context_index`."""
-    task, rem = divmod(idx, N_STATES ** 2)
+    task, rem = divmod(_index(idx, N_CONTEXTS, "context index"), N_STATES ** 2)
     data, tool = divmod(rem, N_STATES)
     return task, data, tool
 
@@ -122,9 +142,16 @@ class DirichletBayesianEngine:
     prior_spread: float = 1.0
     # alpha has shape (125, 5): a Dirichlet concentration vector per context.
     alpha: np.ndarray = field(init=False)
+    _lock: object = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        self.prior_strength = _finite_parameter(self.prior_strength, "prior_strength")
+        self.prior_spread = _finite_parameter(self.prior_spread, "prior_spread", positive=True)
         self.alpha = self._build_informative_prior()
+        with np.errstate(over="ignore"):
+            valid = np.isfinite(self.alpha).all() and np.isfinite(self.alpha.sum(axis=1)).all()
+        if not valid:
+            raise ValueError("prior parameters overflow the concentration sum")
         self._prior = self.alpha.copy()  # keep a copy so we can reset / inspect.
 
     # ------------------------------------------------------------------ priors
@@ -143,7 +170,13 @@ class DirichletBayesianEngine:
             task, data, tool = context_triple(idx)
             degradation = (task + data + tool) / max_degradation  # 0..1
             center = degradation * (N_STATES - 1)                 # 0..4
-            bump = np.exp(-0.5 * ((outcomes - center) / self.prior_spread) ** 2)
+            # Subtract the nearest squared distance first: very small valid spreads
+            # must still produce a normalized bump rather than underflowing to zero.
+            distances = (outcomes - center) ** 2
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                log_bump = -0.5 * (distances - distances.min()) / self.prior_spread / self.prior_spread
+            log_bump[distances == distances.min()] = 0.0
+            bump = np.exp(log_bump)
             bump /= bump.sum()
             # base 1.0 => a proper prior with at least uniform support everywhere.
             alpha[idx] = 1.0 + self.prior_strength * bump
@@ -152,19 +185,35 @@ class DirichletBayesianEngine:
     # ------------------------------------------------------------- conjugacy
     def observe(self, task: int, data: int, tool: int, outcome: int, count: int = 1) -> None:
         """Online conjugate update: ``alpha_posterior = alpha_prior + counts``."""
-        if not 0 <= outcome < N_STATES:
-            raise ValueError(f"outcome {outcome} out of range")
-        self.alpha[context_index(task, data, tool), outcome] += count
+        idx = context_index(task, data, tool)
+        outcome = _index(outcome, N_STATES, "outcome")
+        if isinstance(count, (bool, np.bool_)) or not isinstance(count, Integral) or count < 0:
+            raise ValueError("count must be a nonnegative integer")
+        try:
+            count = float(count)
+        except OverflowError as exc:
+            raise ValueError("count would overflow the posterior") from exc
+        with self._lock:
+            with np.errstate(over="ignore"):
+                updated = self.alpha[idx, outcome] + count
+                valid = np.isfinite(updated) and np.isfinite(self.alpha[idx].sum() + count)
+            if not valid:
+                raise ValueError("count would overflow the posterior")
+            self.alpha[idx, outcome] = updated
 
     def fit(self, samples: Iterable[Tuple[int, int, int, int]]) -> "DirichletBayesianEngine":
         """Batch conjugate update from ``(task, data, tool, outcome)`` observations."""
+        increments = np.zeros_like(self.alpha)
         for task, data, tool, outcome in samples:
-            self.observe(task, data, tool, outcome)
+            increments[context_index(task, data, tool), _index(outcome, N_STATES, "outcome")] += 1
+        with self._lock:
+            self.replace_counts(self.observation_counts() + increments)
         return self
 
     def reset(self) -> None:
         """Discard observed data, returning to the pure prior."""
-        self.alpha = self._prior.copy()
+        with self._lock:
+            self.alpha = self._prior.copy()
 
     # ----------------------------------------------------------- introspection
     def observation_counts(self) -> np.ndarray:
@@ -175,7 +224,8 @@ class DirichletBayesianEngine:
         answering the question that decides whether a 125-cell table is the right
         size: how many contexts has this deployment *ever* visited?
         """
-        return self.alpha - self._prior
+        with self._lock:
+            return self.alpha - self._prior
 
     def coverage(self) -> int:
         """How many of the 125 contexts have at least one real observation."""
@@ -187,18 +237,46 @@ class DirichletBayesianEngine:
 
     # ------------------------------------------------------------- persistence
     def save(self, path: str) -> None:
-        """Write the observed counts (not alpha) so a changed prior still applies on load."""
-        tmp = f"{path}.tmp"
-        with open(tmp, "wb") as fh:
-            np.save(fh, self.observation_counts())
-        os.replace(tmp, path)  # atomic: a crash mid-write never leaves a torn file
+        """Atomically write a snapshot using a unique temporary file.
+
+        Snapshots do not merge independent writers. Shared deployments must record
+        observations transactionally and register their aggregate via set_count_source.
+        """
+        counts = self.observation_counts()
+        path = os.fspath(path)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", dir=os.path.dirname(os.path.abspath(path)),
+                prefix=f".{os.path.basename(path)}.", suffix=".tmp", delete=False,
+            ) as fh:
+                tmp = fh.name
+                np.save(fh, counts, allow_pickle=False)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        finally:
+            if tmp is not None and os.path.exists(tmp):
+                os.unlink(tmp)
 
     def load(self, path: str) -> None:
         """Restore counts written by :meth:`save` on top of this engine's prior."""
-        counts = np.load(path)
+        self.replace_counts(np.load(path, allow_pickle=False))
+
+    def replace_counts(self, counts: np.ndarray) -> None:
+        """Validate and install an authoritative observation snapshot atomically."""
+        counts = np.asarray(counts)
         if counts.shape != self._prior.shape:
             raise ValueError(f"saved counts have shape {counts.shape}, expected {self._prior.shape}")
-        self.alpha = self._prior + counts
+        if counts.dtype.kind not in "iuf" or not np.isfinite(counts).all() or (counts < 0).any():
+            raise ValueError("counts must be finite nonnegative real numbers")
+        with np.errstate(over="ignore"):
+            posterior = self._prior + counts
+            valid = np.isfinite(posterior).all() and np.isfinite(posterior.sum(axis=1)).all()
+        if not valid:
+            raise ValueError("counts overflow the posterior")
+        with self._lock:
+            self.alpha = posterior
 
     # --------------------------------------------------------- predictive CPT
     def cpt(self) -> np.ndarray:
@@ -207,7 +285,8 @@ class DirichletBayesianEngine:
         Column = E[theta | data] = alpha / alpha_0. Each column sums to 1 by
         construction (a property of the Dirichlet mean, not a renormalization).
         """
-        return (self.alpha / self.alpha.sum(axis=1, keepdims=True)).T
+        with self._lock:
+            return (self.alpha / self.alpha.sum(axis=1, keepdims=True)).T
 
     def _predictive_for_context(self, idx: int) -> np.ndarray:
         a = self.alpha[idx]
@@ -220,30 +299,34 @@ class DirichletBayesianEngine:
         what makes the network structure (rather than a flat lookup table) earn its
         keep: we can still answer when a signal is unobserved.
         """
-        fixed = {name: evidence[name] for name in PARENTS if name in evidence}
-        for name, v in fixed.items():
-            if not 0 <= v < N_STATES:
-                raise ValueError(f"{name} evidence {v} out of range")
+        alphas = self._matching_alphas(evidence)
+        totals = alphas.sum(axis=1)
+        return (alphas / totals[:, None]).mean(axis=0), float(totals.mean())
 
-        probs = np.zeros(N_STATES)
-        ess_acc = 0.0
-        n_contexts = 0
+    def _matching_alphas(self, evidence: Dict[str, int]) -> np.ndarray:
+        unknown = set(evidence) - set(PARENTS)
+        if unknown:
+            raise ValueError(f"unknown evidence names: {sorted(unknown)}")
+        fixed = {name: _index(value, N_STATES, name) for name, value in evidence.items()}
         ranges = [
             [fixed[name]] if name in fixed else range(N_STATES) for name in PARENTS
         ]
-        for task in ranges[0]:
-            for data in ranges[1]:
-                for tool in ranges[2]:
-                    idx = context_index(task, data, tool)
-                    probs += self._predictive_for_context(idx)
-                    ess_acc += self.alpha[idx].sum()
-                    n_contexts += 1
-        probs /= n_contexts
-        return probs, ess_acc / n_contexts
+        indices = [context_index(task, data, tool)
+                   for task in ranges[0] for data in ranges[1] for tool in ranges[2]]
+        with self._lock:
+            return self.alpha[indices].copy()
 
     # --------------------------------------------------------------- queries
     def resolve(self, evidence: Dict[str, int]) -> PosteriorSummary:
-        """Resolve a conflict: return the MAP outcome plus calibrated uncertainty."""
+        """Resolve against one consistent posterior snapshot.
+
+        Full-evidence intervals are exact Beta marginals; partial-evidence intervals
+        approximate the posterior of the uniform average with reproducibly seeded draws.
+        """
+        with self._lock:
+            return self._resolve(evidence)
+
+    def _resolve(self, evidence: Dict[str, int]) -> PosteriorSummary:
         probs, ess = self._marginal_predictive(evidence)
         map_idx = int(np.argmax(probs))
         map_p = float(probs[map_idx])
@@ -275,47 +358,50 @@ class DirichletBayesianEngine:
     ) -> Tuple[float, float]:
         """Credible interval for the total probability of one or more outcome states.
 
-        The Dirichlet's aggregation property does the work: if
+        For a fully observed context the Dirichlet's aggregation property applies: if
         ``theta ~ Dirichlet(alpha)`` then the sum of any subset ``S`` of its components
         is marginally ``Beta(sum_{k in S} alpha_k, alpha_0 - sum_{k in S} alpha_k)``.
-        A single state is just the one-element case, so this generalises the old
-        per-state interval exactly rather than approximating it.
+        For partial evidence, independently draw the Beta marginal in every matching
+        context and average with the same uniform weights as the predictive mean.
+        The quantiles use 16,384 draws and seed 0 for deterministic approximation.
+        Averaging concentration vectors would describe a different distribution and
+        incorrectly weight well-observed contexts more heavily.
 
         Passing a set matters because the number this system *reports* is
         ``P(CERTAIN) + P(HIGH)`` -- a sum of two states. Bounding a single MAP state
         instead would attach an interval to a different quantity than the confidence it
         travels with.
         """
-        idxs = [outcomes] if isinstance(outcomes, (int, np.integer)) else sorted(set(outcomes))
-        for i in idxs:
-            if not 0 <= i < N_STATES:
-                raise ValueError(f"outcome index {i} out of range")
-
-        ranges = [
-            [evidence[name]] if name in evidence else range(N_STATES) for name in PARENTS
-        ]
-        a_k, a_rest, n = 0.0, 0.0, 0
-        for task in ranges[0]:
-            for data in ranges[1]:
-                for tool in ranges[2]:
-                    a = self.alpha[context_index(task, data, tool)]
-                    selected = float(a[idxs].sum())
-                    a_k += selected
-                    a_rest += a.sum() - selected
-                    n += 1
-        a_k /= n
-        a_rest /= n
+        raw_idxs = [outcomes] if isinstance(outcomes, Integral) else list(outcomes)
+        idxs = sorted({_index(i, N_STATES, "outcome") for i in raw_idxs})
+        mass = _finite_parameter(mass, "mass", positive=True)
+        if mass >= 1:
+            raise ValueError("mass must be less than 1")
+        alphas = self._matching_alphas(evidence)
+        if not idxs:
+            return 0.0, 0.0
+        if len(idxs) == N_STATES:
+            return 1.0, 1.0
+        rest = [i for i in range(N_STATES) if i not in idxs]
+        a_k, a_rest = alphas[:, idxs].sum(axis=1), alphas[:, rest].sum(axis=1)
+        tail = (1.0 - mass) / 2.0
+        if len(alphas) > 1:
+            rng = np.random.default_rng(0)
+            draws = np.zeros(16384)
+            for selected, other in zip(a_k, a_rest, strict=True):
+                draws += rng.beta(selected, other, size=len(draws))
+            draws /= len(alphas)
+            low, high = np.quantile(draws, [tail, 1 - tail])
+            return float(low), float(high)
+        a_k, a_rest = float(a_k[0]), float(a_rest[0])
         try:
             from scipy.stats import beta  # optional dependency
-            tail = (1.0 - mass) / 2.0
             return float(beta.ppf(tail, a_k, a_rest)), float(beta.ppf(1 - tail, a_k, a_rest))
-        except Exception:
-
-            a0 = a_k + a_rest
-            mean = a_k / a0
-            var = a_k * a_rest / (a0 ** 2 * (a0 + 1))
-            sd = float(np.sqrt(var))
-            return max(0.0, mean - 1.96 * sd), min(1.0, mean + 1.96 * sd)
+        except ImportError:
+            # The minimal installation uses the same reproducible approximation.
+            draws = np.random.default_rng(0).beta(a_k, a_rest, size=16384)
+            low, high = np.quantile(draws, [tail, 1 - tail])
+            return float(low), float(high)
 
     # ----------------------------------------------------- optional pgmpy view
     def build_network(self):
@@ -348,6 +434,22 @@ class DirichletBayesianEngine:
 # Module-level convenience API (deterministic, backwards compatible).
 # --------------------------------------------------------------------------
 _DEFAULT_ENGINE: Optional[DirichletBayesianEngine] = None
+_DEFAULT_ENGINE_LOCK = threading.RLock()
+_COUNT_SOURCE: Optional[Callable[[], np.ndarray]] = None
+
+
+def set_count_source(source: Optional[Callable[[], np.ndarray]]) -> None:
+    """Register an authoritative transactional aggregate, or disable refreshing.
+
+    The source returns finite nonnegative counts with shape ``(125, 5)``. It takes
+    precedence over ENGINE_STATE_PATH. Record updates in that store rather than
+    mutating the returned engine: each getter refresh replaces its snapshot.
+    """
+    if source is not None and not callable(source):
+        raise ValueError("count source must be callable or None")
+    global _COUNT_SOURCE
+    with _DEFAULT_ENGINE_LOCK:
+        _COUNT_SOURCE = source
 
 
 def get_default_engine() -> DirichletBayesianEngine:
@@ -357,13 +459,16 @@ def get_default_engine() -> DirichletBayesianEngine:
     top of the prior, so what the engine learned survives a restart.
     """
     global _DEFAULT_ENGINE
-    if _DEFAULT_ENGINE is None:
-        engine = DirichletBayesianEngine()
-        path = os.getenv("ENGINE_STATE_PATH")
-        if path and os.path.exists(path):
-            engine.load(path)
-        _DEFAULT_ENGINE = engine
-    return _DEFAULT_ENGINE
+    with _DEFAULT_ENGINE_LOCK:
+        if _DEFAULT_ENGINE is None:
+            engine = DirichletBayesianEngine()
+            path = os.getenv("ENGINE_STATE_PATH")
+            if _COUNT_SOURCE is None and path and os.path.exists(path):
+                engine.load(path)
+            _DEFAULT_ENGINE = engine
+        if _COUNT_SOURCE is not None:
+            _DEFAULT_ENGINE.replace_counts(_COUNT_SOURCE())
+        return _DEFAULT_ENGINE
 
 
 def outcome_label(correct: int) -> int:
@@ -377,6 +482,8 @@ def outcome_label(correct: int) -> int:
     calibrated confidence is supposed to equal. Intermediate outcome states stay
     reachable from the prior, so low-count contexts are still smoothly regularized.
     """
+    if not isinstance(correct, (Integral, bool, np.bool_)) or correct not in (0, 1):
+        raise ValueError("correct must be a binary label")
     return STATE_MAP["CERTAIN"] if correct else STATE_MAP["AMBIGUOUS"]
 
 
@@ -424,6 +531,7 @@ __all__ = [
     "GOOD_STATES",
     "build_bayesian_network",
     "get_default_engine",
+    "set_count_source",
     "outcome_label",
     "context_index",
     "context_triple",

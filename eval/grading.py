@@ -15,6 +15,7 @@ system, which is exactly the circularity this eval exists to avoid.
 
 from __future__ import annotations
 
+import math
 import re
 import string
 import unicodedata
@@ -24,7 +25,34 @@ _ARTICLES = re.compile(r"\b(a|an|the)\b", re.UNICODE)
 _WHITESPACE = re.compile(r"\s+")
 _PUNCT_TABLE = {ord(c): " " for c in string.punctuation}
 # Matches 1234, 1,234.5, -12, .5 -- trailing '.' is left to normalization.
-_NUMBER = re.compile(r"-?\d[\d,]*\.?\d*|-?\.\d+")
+_DECIMAL = r"[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+_NUMBER = re.compile(rf"({_DECIMAL})(?:\s*/\s*({_DECIMAL}))?")
+_FINAL = re.compile(
+    r"(?im)\b(?:final\s+answer|the\s+answer|answer)\s*(?:is\b|:|=)\s*"
+)
+_BOXED = re.compile(r"\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}")
+_LATEX_FRACTION = re.compile(r"\\(?:d?frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}")
+_UNCERTAIN = re.compile(r"\b(?:or|either|maybe|perhaps|not sure|don't know|do not know)\b", re.I)
+_NEGATED = re.compile(
+    r"\b(?:not|isn't|isn’t|wasn't|wasn’t|wrong|incorrect|rather than|instead of)\b", re.I
+)
+GRADING_VERSION = 2
+
+
+def final_answer_span(prediction: str) -> str:
+    """Prefer the final explicitly labelled answer over numbers/names in reasoning.
+
+    This is a deterministic safeguard, not semantic judging. Free-form containment
+    remains an approximate grader; structured final answers are the preferred input.
+    """
+    text = str(prediction or "").strip()
+    boxed = list(_BOXED.finditer(text))
+    labelled = list(_FINAL.finditer(text))
+    spans = [(m.start(), m.group(1)) for m in boxed]
+    spans.extend((m.start(), text[m.end():].split("\n", 1)[0]) for m in labelled)
+    if spans:
+        return max(spans, key=lambda entry: entry[0])[1].strip()
+    return text
 
 
 def normalize_answer(text: str) -> str:
@@ -54,7 +82,13 @@ def contains_match(prediction: str, golds: Sequence[str]) -> bool:
     Token-boundary matching, not raw substring: raw ``in`` would score "Austria" as a
     hit for gold "Austr" and, worse, mark a gold of "no" correct inside "nothing".
     """
-    pred_tokens = normalize_answer(prediction).split()
+    candidate = final_answer_span(prediction)
+    if _UNCERTAIN.search(candidate):
+        return False
+    # Reject explicitly negated mentions, rather than rewarding an answer merely for
+    # naming an alternative it dismisses. The word "no" itself can be a valid gold.
+    clauses = [c for c in re.split(r"[;.!?\n]", candidate) if not _NEGATED.search(c)]
+    pred_tokens = normalize_answer(" ; ".join(clauses)).split()
     if not pred_tokens:
         return False
     for gold in golds:
@@ -71,15 +105,29 @@ def contains_match(prediction: str, golds: Sequence[str]) -> bool:
 def extract_numbers(text: str) -> list[float]:
     """All numbers in ``text``, comma separators removed, in order of appearance."""
     out: list[float] = []
-    for raw in _NUMBER.findall(str(text or "")):
-        cleaned = raw.replace(",", "").rstrip(".")
-        if cleaned in ("", "-", "."):
-            continue
+    text = str(text or "").replace("−", "-")
+    text = _LATEX_FRACTION.sub(r"\1/\2", text)
+    for numerator, denominator in _NUMBER.findall(text):
         try:
-            out.append(float(cleaned))
-        except ValueError:
+            value = float(numerator.replace(",", "").rstrip("."))
+            if denominator:
+                value /= float(denominator.replace(",", "").rstrip("."))
+            if math.isfinite(value):
+                out.append(value)
+        except (ValueError, ZeroDivisionError):
             continue
     return out
+
+
+def _last_number(text: str) -> Optional[float]:
+    text = _LATEX_FRACTION.sub(r"\1/\2", str(text or "").replace("−", "-"))
+    tokens = list(_NUMBER.finditer(text))
+    if not tokens:
+        return None
+    # Parse only the final complete numeric token. An invalid final fraction/overflow
+    # must not cause an earlier intermediate result to be graded as the answer.
+    values = extract_numbers(tokens[-1].group(0))
+    return values[-1] if values else None
 
 
 def numeric_match(prediction: str, golds: Sequence[str], *, rel_tol: float = 1e-6) -> bool:
@@ -88,15 +136,16 @@ def numeric_match(prediction: str, golds: Sequence[str], *, rel_tol: float = 1e-
     Final rather than first: chain-of-thought style answers restate intermediate
     quantities before the result, so the last number is the conventional choice.
     """
-    pred_numbers = extract_numbers(prediction)
-    if not pred_numbers:
+    candidate = final_answer_span(prediction)
+    if _UNCERTAIN.search(candidate) or _NEGATED.search(candidate):
         return False
-    pred = pred_numbers[-1]
+    pred = _last_number(candidate)
+    if pred is None:
+        return False
     for gold in golds:
-        gold_numbers = extract_numbers(gold)
-        if not gold_numbers:
+        target = _last_number(gold)
+        if target is None:
             continue
-        target = gold_numbers[-1]
         tolerance = max(rel_tol, abs(target) * rel_tol)
         if abs(pred - target) <= tolerance:
             return True
@@ -126,4 +175,6 @@ __all__ = [
     "extract_numbers",
     "grade",
     "GRADERS",
+    "GRADING_VERSION",
+    "final_answer_span",
 ]

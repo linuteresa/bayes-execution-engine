@@ -1,0 +1,213 @@
+# Strict code review — 2026-10-28
+
+This is the original review, recorded before remediation. Its findings and source line numbers describe that snapshot. See [remediation status](REMEDIATION.md) for the fixes now present and remaining validation.
+
+Assessment: the repository is a useful local prototype, but its durable execution, multi-worker learning, and confidence reporting need the fixes below before those capabilities can be relied on. The most consequential problems occur at boundaries that the existing unit tests do not exercise.
+
+Scope: reviewed the graph and all execution nodes, Bayesian engine, scaling pipeline, HTTP services and frontend, persistence adapters, evaluation pipeline, deployment configuration, and related tests. Application code was not changed. The pre-existing untracked `graphify-out/` directory was left alone.
+
+Validation: `.venv/bin/python -m pytest` passed **169 tests** with 13 dependency deprecation warnings; `ruff check . --output-format concise --exclude graphify-out` passed. Additional offline reproductions covered graph execution, shared checkpoint reuse, malformed plans, evidence extraction, Bayesian intervals, feedback failure/concurrency, queue capacity, HTTP error handling, sample replay, and selective-prediction metrics. Live llama.cpp inference, real Redis/Postgres integration, and a Docker build were not exercised. Persistent saver contracts were checked against official upstream source and reproduced using a contract-equivalent factory. Frontend injection was checked by executing the actual handler in a Node VM with a mocked DOM/API response; a real browser exploit was not run.
+
+P1 means fix before relying on the affected capability. P2 means a concrete correctness or robustness problem to address next. P3 means a lower-priority improvement. The priorities apply to the triggering scenarios described, rather than implying every issue affects the default local demo.
+
+1. **P1 — Model-controlled output reaches an executable HTML sink.**
+
+   Location: [templates/index.html:310](../templates/index.html).
+
+   Step names and results are interpolated into `stepsList.innerHTML`. These strings come from the planner and executor, so a model response containing HTML can run script in the UI origin. The final response's use of `textContent` does not protect the separate steps rendering path.
+
+   Evidence: injecting `<img src=x onerror="window.__xss = 1">` into a mocked API step caused the actual handler to insert the payload unchanged into HTML, for both the task and result.
+
+   Recommendation: build step elements with `document.createElement` and assign every dynamic value with `textContent`. If rich output is introduced later, use an explicit sanitization policy. Add a browser regression test with hostile markup in both fields.
+
+2. **P1 — Sequential execution does not pass prior results to the next step.**
+
+   Locations: [nodes/executor.py:100](../nodes/executor.py), [nodes/llm_executor.py:79](../nodes/llm_executor.py).
+
+   Each executor call receives only the current task and original user input. `past_steps` never reaches the sampling prompt. A plan such as “derive an intermediate value, then double that value” cannot consume its own intermediate result unless the replanner happens to copy it into the next task. Forced re-checks likewise cannot see the answer they are checking.
+
+   Evidence: placed `SECRET_VALUE_37` in a completed step and executed “Double the prior result.” None of the four sample prompts contained that result.
+
+   Recommendation: pass structured dependency results into the executor, including the prior attempt and reason for a re-check. Bound the context size and identify results by stable step IDs. Test a two-step dependency where the second result can only be obtained from the first step's output.
+
+3. **P1 — Redis/Postgres checkpointer factories return the wrong object.**
+
+   Locations: [persistence/checkpointer.py:39](../persistence/checkpointer.py), [persistence/checkpointer.py:49](../persistence/checkpointer.py).
+
+   The persistent backends' `from_conn_string` factories return context managers. The code returns those managers without entering them; LangGraph expects the saver yielded by the context. Initial schema/index setup is also absent. If the packages are missing, the broad exception handlers silently select memory, violating the requested durability setting. The context-manager contracts are visible in the official [Postgres implementation](https://raw.githubusercontent.com/langchain-ai/langgraph/main/libs/checkpoint-postgres/langgraph/checkpoint/postgres/__init__.py) and [Redis implementation](https://raw.githubusercontent.com/redis-developer/langgraph-redis/main/langgraph/checkpoint/redis/__init__.py).
+
+   Evidence: a factory with the upstream contract returned `_GeneratorContextManager`; the installed LangGraph rejected it with `TypeError: Invalid checkpointer provided`.
+
+   Recommendation: manage saver resources in application lifespan with an `ExitStack`, enter the factory context, perform required setup, and pass the yielded saver. Fail startup when an explicitly configured persistent backend cannot initialize. Add real integration tests for initial setup, checkpoint write/read, and resource cleanup.
+
+4. **P1 — Accepted jobs cannot recover after a worker restart.**
+
+   Locations: [service/api.py:83](../service/api.py), [persistence/job_store.py:27](../persistence/job_store.py), [core/graph.py:84](../core/graph.py).
+
+   Dispatch exists only in the process-local `ThreadPoolExecutor`. Redis can retain a job's status but cannot reconstruct that queue. There is no startup recovery scan, lease, acknowledgement, or redispatch path. The persisted `Job` omits the requested `thread_id`, and the graph runner always submits a fresh initial input rather than exposing a checkpoint-resume operation.
+
+   Evidence: retaining an accepted job store while replacing the executor pool left the job permanently queued with no work in the replacement pool. The persisted job lacked its custom session ID. A crash during execution similarly leaves a `running` record without an owner.
+
+   Recommendation: persist a complete task envelope, including run/thread identity, and dispatch through a durable queue or a leased database worker protocol. Add explicit checkpoint resume, worker ownership, retries, and terminal failure handling. At minimum, detect and fail abandoned jobs. Correct the restart-resume claims in `docs/SYSTEM_DESIGN.md` until recovery is implemented. Test a restart after acceptance and another after a saved graph transition.
+
+5. **P1 — Feedback can be applied twice or lost across workers and failures.**
+
+   Locations: [service/api.py:107](../service/api.py), [service/api.py:118](../service/api.py), [bayesian_engine/bayes_engine.py:189](../bayesian_engine/bayes_engine.py), [bayesian_engine/bayes_engine.py:353](../bayesian_engine/bayes_engine.py).
+
+   The feedback lock protects only one process. Observations, snapshot saving, and the job feedback marker are separate writes. Each process owns an independent engine snapshot, so saving can overwrite observations learned by other workers. Concurrent saves also share one temporary filename. Lazy engine initialization has no lock and can return distinct engine instances to concurrent callers.
+
+   Evidence: two API instances accepted the same job's feedback and produced two observations from one evidence entry. A failed save left `feedback=None`; retrying increased observations from one to two. Two concurrent saves to the same path produced one success and one `FileNotFoundError`. Saving independent worker snapshots retained only one of two observed contexts. Concurrent singleton initialization returned an engine whose later observations were absent from the shared instance.
+
+   Recommendation: atomically record a feedback event with a unique job ID, then update shared counts through transactional or idempotent processing. Use atomic shared increments or rebuild snapshots from the event log. Initialize the in-process engine once under a lock; unique temporary files can prevent filename collisions but do not solve cross-worker lost updates. Test duplicate concurrent feedback, a failure at each commit boundary, and independent workers observing different contexts.
+
+6. **P1 — Abstention accuracy and AURC can be manufactured by row order.**
+
+   Location: [eval/metrics.py:213](../eval/metrics.py).
+
+   Stable sorting treats equal-confidence items as if their input order provided ranking information. The effect is material for this discretized engine: the committed embedding evaluation has only ten distinct confidence values across 500 items. The comment calling the bias “slightly pessimistic” is incorrect; either direction is possible.
+
+   Evidence: constant scores with 50 correct and 50 incorrect labels yielded AUROC 0.5 in either order, but accuracy at 50% coverage changed from 1.0 to 0.0 and AURC from 0.156 to 0.844 when the labels were reversed. Reordering ties in the existing TriviaQA embedding rows moves half-coverage accuracy from the published 0.600 to values between 0.576 and 0.656; GSM8K's 0.448 can move between 0.384 and 0.496.
+
+   Recommendation: compute expected selection within tied score groups, or report only coverages attainable by a confidence threshold. Add permutation-invariance tests. Regenerate risk/coverage figures and related README/report claims after the correction. This defect concerns selective-prediction metrics; it does not establish that the AUROC or Brier calculations are wrong.
+
+7. **P2 — Checkpoint session lifetime and new-run state have incompatible semantics.**
+
+   Locations: [service/api.py:64](../service/api.py), [core/graph.py:84](../core/graph.py), [core/state.py:8](../core/state.py).
+
+   A new `MemorySaver` is created for every job, so the same `thread_id` cannot preserve state across requests. Sharing the saver exposes the opposite issue: supplying `[]` does not reset channels with `operator.add` reducers. Old steps, confidences, and evidence accumulate into the next invocation, affecting step budgets, returned results, and feedback counts.
+
+   Evidence: two separate one-step calls with a shared `MemorySaver` and the same thread returned step counts of one and two; the second result included the first run's completed step.
+
+   Recommendation: define separate session, run, and resume identities. Own the saver for the intended application lifetime. Use a fresh run/checkpoint namespace for a new question or explicitly reset reducer channels; resume an interrupted run through a separate operation. Test successive questions and concurrent calls on a session, including confidence/evidence isolation and step-budget behavior.
+
+8. **P2 — Malformed plans can execute nonsense or report 100% confidence with no work.**
+
+   Locations: [nodes/planner.py:26](../nodes/planner.py), [nodes/replanner.py:121](../nodes/replanner.py), [core/graph.py:91](../core/graph.py).
+
+   Balanced JSON extraction is followed by unchecked `.get()` calls rather than schema validation. A string in `steps` is treated as a sequence of one-character tasks. Missing or unparseable planner output becomes an empty plan; the run can then return a successful-looking result using the initial confidence of 1.0. Null/non-array replanner steps can also crash processing.
+
+   Evidence: `{"steps":"ABC"}` executed tasks `A`, `B`, and `C`. Unparseable planner output produced “No results were produced,” zero steps, and confidence 1.0.
+
+   Recommendation: validate planner/replanner decisions with strict schemas: nonempty lists of nonempty strings, bounded plan length, supported action values, and string responses. Align the currently unused schemas with the actual protocol. Use bounded repair/retry for malformed model output and return an explicit error or unmeasured confidence when planning fails. Add graph-level tests for wrong types and empty plans.
+
+9. **P2 — Partial-evidence credible intervals describe a different quantity from the prediction.**
+
+   Location: [bayesian_engine/bayes_engine.py:294](../bayesian_engine/bayes_engine.py).
+
+   Partial-evidence predictive probabilities uniformly average context probabilities, while the interval calculation averages concentration vectors and fits a Beta distribution. With unequal context sample sizes, this changes the weighting; even with equal sizes, the distribution of a mean of independent probabilities is generally not that Beta distribution. The full-evidence Beta calculation is valid.
+
+   Evidence: after `engine.observe(0, 0, 0, 0, count=10000)`, resolving `{"TaskStatus":0,"DataQuality":0}` reports good confidence 0.6780 with a 95% interval of [0.9950, 0.9992]. A 100,000-draw simulation of the actual uniformly averaged posterior gives approximately [0.5750, 0.7774].
+
+   Recommendation: keep the exact full-context calculation and calculate the posterior of the weighted sum for partial evidence, using quadrature or an explicitly documented approximation. Add unequal-ESS tests against posterior simulation. Current executor calls provide full evidence, so this issue primarily affects the advertised partial-query API.
+
+10. **P2 — Correct short answers are classified as refusals.**
+
+    Location: [nodes/llm_executor.py:140](../nodes/llm_executor.py).
+
+    Any answer containing fewer than two ASCII word tokens is marked degenerate. Valid concise answers such as `Paris.`, `42`, and `Yes.` therefore receive the worst `TaskStatus`; non-Latin answers can be affected as well. The replanner interprets the resulting status as every sample refusing and suppresses a retry.
+
+    Evidence: four identical samples of each short answer produced answerability 0.0 and `TaskStatus=4`. “The answer is Paris.” produced answerability 1.0 and `TaskStatus=0`.
+
+    Recommendation: distinguish empty output and explicit refusal from answer length. Use a question-aware answer contract where practical, and make tokenization Unicode-aware. Test single-word, numeric, yes/no, and non-English valid answers as well as actual refusals.
+
+11. **P2 — Numeric contradiction protection discards signs and decimal structure.**
+
+    Locations: [nodes/llm_executor.py:39](../nodes/llm_executor.py), [nodes/llm_executor.py:163](../nodes/llm_executor.py).
+
+    The tokenizer strips punctuation, then `_numbers` compares unordered sets of digit tokens. `42` and `-42` become identical, and `1.5` and `5.1` contain the same digit set and word bag. Conflicting numeric answers can therefore look perfectly consistent under the default backend and pass the numeric grouping guard.
+
+    Evidence: alternating “The result is 42.” and “The result is -42.” across four samples produced consistency 1.0 and all-zero evidence. Alternating 1.5 and 5.1 produced the same evidence.
+
+    Recommendation: parse signed numeric literals, decimal structure, and supported units from the original text. Compare normalized answer values rather than digit sets. Apply incompatibility checks to agreement and consensus selection as well as distinct-answer grouping. Test negative numbers, decimals, scientific notation, fractions, and equivalent numeric representations.
+
+12. **P2 — Work intake, inference duration, and default retention are unbounded.**
+
+    Locations: [service/api.py:43](../service/api.py), [service/api.py:87](../service/api.py), [persistence/job_store.py:52](../persistence/job_store.py), [core/llm.py:34](../core/llm.py).
+
+    Eight workers bound active tasks but do not bound the executor queue. Prompt length has no upper limit, and the default memory job store never expires records. The LLM client has no request timeout or generation limit, so a stalled server can occupy all workers while submissions continue accumulating.
+
+    Evidence: with eight blocked workers, 100 submissions were accepted and 92 remained queued. Local client inspection showed `root_client.timeout=None` and HTTPX `Timeout(timeout=None)`; `max_tokens` was also unset.
+
+    Recommendation: add admission capacity with 429/503 responses, prompt/sample/token limits, request timeouts, an overall job deadline, and retention/expiry. Define cancellation and shutdown behavior. Test saturated intake and a stalled inference backend.
+
+13. **P2 — Public Bayesian mutations accept values that destroy probability invariants.**
+
+    Locations: [bayesian_engine/bayes_engine.py:126](../bayesian_engine/bayes_engine.py), [bayesian_engine/bayes_engine.py:153](../bayesian_engine/bayes_engine.py), [bayesian_engine/bayes_engine.py:196](../bayesian_engine/bayes_engine.py).
+
+    Constructor parameters and observation counts are insufficiently validated; loading checks only array shape. Negative/nonfinite values can enter the concentration table, invalidating distributions and intervals.
+
+    Evidence: `count=-100` produced a probability of approximately 1.0855, negative probabilities, and NaN intervals. `prior_spread=0` produced NaNs, and negative/nonfinite saved counts were accepted when their shape matched.
+
+    Recommendation: validate finite positive spread, finite nonnegative strength/counts, integer context/outcome indices in range, and numeric finite nonnegative saved counts before changing state. Require positive resulting concentrations. Test that invalid operations fail without modifying the prior state. The current feedback endpoint supplies positive unit counts; this finding applies to the public engine API and loading persisted data.
+
+14. **P2 — Duplicate evaluation IDs silently substitute another question's samples.**
+
+    Locations: [eval/answerers.py:269](../eval/answerers.py), [eval/datasets.py:239](../eval/datasets.py), [eval/learning.py:65](../eval/learning.py).
+
+    Replay stores rows in a dictionary keyed only by `item_id` while retaining every question in its item list. Ingestion does not enforce unique IDs. Merging JSONL shards with overlapping IDs therefore overwrites samples without an error. Repeated questions can also appear in both halves of the row-level learning split.
+
+    Evidence: two rows with the same ID and correct Paris/Berlin answers replayed as Berlin/Berlin, changing the first question's correctness and evidence.
+
+    Recommendation: validate or namespace identities at ingestion and replay, and reject conflicting duplicates. Split repeated questions as groups to prevent train/test leakage. Test overlapping IDs across dataset components and duplicate question content with different IDs.
+
+15. **P2 — A late evaluation failure discards all completed inference work.**
+
+    Location: [eval/run_eval.py:309](../eval/run_eval.py).
+
+    `rows.jsonl` is written only after every question has completed in the in-memory harness. A connection error, interrupt, embedding failure, or grading failure near the end loses all prior rows and stored samples from that invocation.
+
+    Evidence: injecting an inference failure after one completed item left no recoverable row file in the output directory.
+
+    Recommendation: append and flush each completed row during collection, persist its experiment identity, and support validated resume. Mark partial runs explicitly and prevent incomplete runs from being presented as final results. Test interruption followed by resume without resampling completed items.
+
+16. **P2 — Replay/reanalysis provenance can describe the wrong dataset and omit the agreement configuration.**
+
+    Locations: [eval/run_eval.py:88](../eval/run_eval.py), [eval/run_eval.py:295](../eval/run_eval.py), [eval/harness.py:202](../eval/harness.py).
+
+    Replay brings its own questions but metadata still uses the CLI default dataset, `bundled`. Reanalysis from rows cannot recover the agreement backend, temperature, sampling seed, or full original configuration. This weakens the repository's replay/reproducibility contract.
+
+    Evidence: the committed embeddings `metrics.json` labels its dataset spec `bundled` even though its 500 questions come from TriviaQA/GSM8K. Reanalysis metadata does not retain the known embedding backend.
+
+    Recommendation: persist a versioned experiment manifest linked from every row, including dataset/revision/selection, model identity, sampling settings, similarity model/configuration, engine settings, and code revision. Inherit source provenance during replay and emit an actual replay command rather than a fresh-sampling command with default settings.
+
+17. **P2 — The documented optional Redis deployment is incomplete.**
+
+    Locations: [requirements.txt:24](../requirements.txt), [docker-compose.yml:18](../docker-compose.yml), [Dockerfile:11](../Dockerfile).
+
+    Redis dependencies are commented out, the image installs only those requirements, and Compose does not forward `REDIS_URL` or a persistence path/volume. Enabling `JOB_STORE=redis` on the supplied image fails to import Redis; adding the dependency alone still leaves the default URL pointing inside the engine container rather than to a Redis service. The supplied Compose configuration also does not persist learned engine counts.
+
+    Recommendation: provide installable runtime extras and a complete durable Compose profile with Redis service DNS, required packages, saver initialization, connection settings, and persistent storage. Load configuration consistently before constructing application resources. Add a smoke test that submits, completes, restarts, and retrieves a job using that profile.
+
+18. **P2 — A missing model is rendered as a blank successful response in the Flask UI.**
+
+    Locations: [app.py:31](../app.py), [templates/index.html:295](../templates/index.html).
+
+    The engine returns an error dictionary when the LLM is unavailable, but Flask serializes it with HTTP 200. The frontend checks only `response.ok`, ignores `data.error`, and displays a blank response with 0% confidence instead of the actionable error.
+
+    Evidence: a mocked unavailable-model result returned HTTP 200 from `/ask` with an `error` field, taking the frontend's success path.
+
+    Recommendation: use a consistent success/error result type and map unavailable inference to an appropriate HTTP status, such as 503. Also handle an error payload explicitly in the UI. Test HTTP behavior through the Flask client, not only the engine function.
+
+19. **P2 — Scaling updates can silently train on truncated or misindexed data.**
+
+    Locations: [scaling/latent_bayes.py:61](../scaling/latent_bayes.py), [scaling/latent_bayes.py:113](../scaling/latent_bayes.py).
+
+    `update()` uses non-strict `zip`, silently dropping unmatched examples or labels. Context construction truncates floating bins and does not validate the number or range of factors. Negative outcome indices select classes from the end of the NumPy array instead of being rejected.
+
+    Recommendation: require equal example/label counts and validate dimensions, integer bins, factor counts, outcomes, and positive grid parameters before mutation. Reject refitting a projection after learning, or reset/retrain the grid because its cell meanings change. Add focused validation tests that assert failed updates preserve existing counts.
+
+Further recommendations:
+
+- **P3 — Configure tracing explicitly.** [core/telemetry.py:103](../core/telemetry.py) obtains a tracer but never installs an SDK provider/exporter. Setting the documented endpoint and installing the SDK alone does not configure export. Initialize tracing at application startup or document required external instrumentation, and propagate run/job trace context into step events.
+- **P3 — Validate Flask request types.** [app.py:27](../app.py) assumes an object body containing a string. `{"question":4}` and `["bad"]` produce 500 responses. Return 400 for malformed input and bound request size.
+- **Audit grading labels before strengthening calibration claims.** [eval/grading.py:65](../eval/grading.py) accepts a gold alias even when the answer explicitly rejects it; the numeric grader interprets `1e3` as final number 3 and `3/4` as 4. Extract a structured final answer, support explicit numeric forms, and manually audit a sample of real labels. These are limitations of the implemented grading rules rather than evidence that every committed label is incorrect.
+- **Measure final-answer confidence separately.** [eval/harness.py:97](../eval/harness.py) deliberately evaluates a single executor step. It does not validate the weakest-step aggregate as a probability of final-answer correctness, nor assess errors introduced by replanner synthesis. Add a held-out end-to-end evaluation before attaching the single-step calibration results to whole-run confidence.
+- **Make configuration and dependencies reproducible.** The FastAPI entrypoint does not load `.env`, while the CLI and Flask entrypoints do. Document `--env-file` or load settings once at startup. Lock tested dependency versions, separate runtime/dev/optional extras, and align README/Quickstart test counts and completed-roadmap claims with the current implementation.
+- **Add ownership checks before multi-user deployment.** The API currently has no authenticated principal or job/thread ownership model. If it is deployed for multiple users, scope job reads, feedback, and checkpoint identities to the caller; client-provided thread IDs are not an ownership boundary.
+
+Recommended implementation order:
+
+1. Fix UI escaping, executor dependency context, strict model-output validation, and explicit failure results. Add graph/HTTP/browser regressions for those paths.
+2. Define run/resume/session semantics. Introduce managed persistent savers, durable dispatch/recovery, and a transactional feedback event/count store. Validate these with real Redis/Postgres and multiple workers.
+3. Correct evidence extraction, partial-query intervals, and tied-score metrics. Regenerate affected evaluation artifacts and audit a sample of correctness labels.
+4. Add bounded intake/inference/retention, incremental evaluation output, versioned experiment provenance, and a reproducible deployment profile.

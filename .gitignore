@@ -16,3 +16,13 @@ venv/
 # Local models (GGUF weights are large; download separately)
 models/
 *.gguf
+
+# Local service state and analysis caches
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+engine_counts.npy
+graphify-out/
+build/
+dist/
