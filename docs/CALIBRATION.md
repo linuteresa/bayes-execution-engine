@@ -41,6 +41,13 @@ uses, so the confidences being scored are the confidences the agent actually rep
 nothing is re-derived for the eval's benefit. Everything downstream is a pure function of
 `rows.jsonl`, which is why `--rows` can re-analyse an old run with no model present.
 
+To compare agreement measures fairly, score **the same samples** both ways rather than
+running twice (two runs differ in sampling noise as well as in the measure). Run once with
+`--keep-samples`, then `--model replay:<rows.jsonl>` re-scores those stored samples under
+whatever measure is active now. The replay keeps the source run's provenance, so a
+replayed simulated run is still stamped simulated. Every report records its
+**agreement measure** (`word-overlap` or `embeddings:<model>`).
+
 ## What gets logged per item
 
 | Field | Meaning |
@@ -170,6 +177,30 @@ Coverage was 42 of 125 contexts across 500 items, only 12 with 10+ observations.
 through the latent PCA grid reach 64 of 125 and a better held-out ECE (0.072), which is the
 argument for reducing dimensions rather than enlarging the table, now with numbers attached.
 
+## What the second run found
+
+Same 500 items, Qwen2.5-3B-Instruct Q4_K_M on llama-server, after the evidence changes
+(reworded answers grouped for `ToolReliability`, no-invented-data step prompt). Sampled once;
+the identical samples scored under word overlap and embeddings (`--model replay:`).
+
+- **Embeddings raise AUROC by +0.053 [+0.024, +0.082]** (paired bootstrap) and Brier by
+  −0.013 [−0.022, −0.006]; ECE is unchanged. The gain is on TriviaQA (0.647 → 0.743,
+  +0.096 [+0.058, +0.137]); GSM8K is flat (0.549 → 0.554). Paraphrased correct answers stop
+  reading as disagreement; maths answers were already near-identical strings.
+- With embeddings the engine **beats raw agreement** (+0.037 [+0.004, +0.072]) and **ties mean
+  token logprob** (−0.000 [−0.034, 0.035]) — in the first run it lost to logprob.
+- **Grouping rewordings is a trade-off.** Restoring the old exact-string count on the same
+  samples (a one-off ablation) gives TriviaQA/words 0.720 vs 0.647 now, GSM8K/words 0.444 vs
+  0.549 now; under embeddings TriviaQA is unaffected (0.741 vs 0.743). It also raises
+  prior-only ECE (0.087 → 0.145 on words) since `ToolReliability = 4` drops from 32% to 11% of
+  trivia items. After learning, held-out ECE is 0.042 (words) and 0.085 (embeddings), against
+  0.027 for the old rule on words; held-out AUROC favours embeddings (0.68 vs 0.60–0.62).
+- Learning's ECE gain clears its interval on words (−0.100 [−0.127, −0.005]) and nearly does
+  on embeddings (−0.054 [−0.117, 0.006]). Coverage: 40 and 39 of 125 cells.
+
+Accuracy moved between runs (GSM8K 0.22 → 0.39), but model build, server and prompt all
+changed at once, so that is not attributable to any one of them.
+
 ### A note on run-to-run variance
 
 Sampling runs at temperature 0.7, so two runs of the same configuration differ. Between the
@@ -181,9 +212,8 @@ report the spread.
 
 ## Known limitations
 
-- Agreement is bag-of-words cosine, so paraphrases read as disagreement. Semantic agreement
-  (embeddings/NLI) is the obvious upgrade — and now it can be *shown* to help rather than
-  asserted to, by re-running this eval.
+- Word-overlap agreement reads paraphrases as disagreement; embeddings fix that (measured
+  above). Neither catches contradictions or changed numbers — that needs NLI.
 - Grading is normalized alias containment / numeric match. An unusually phrased correct
   answer is scored wrong, which looks like overconfidence.
 - Self-consistency measures agreement, not truth: a model that is confidently and

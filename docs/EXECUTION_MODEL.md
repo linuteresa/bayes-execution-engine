@@ -34,10 +34,22 @@ flowchart TD
 | `ToolReliability` | distinct answers / N (rewordings grouped) | high dispersion ⇒ unstable |
 
 Each maps onto `0 = CERTAIN … 4 = AMBIGUOUS`, e.g. `DataQuality = clip(round((1−agreement)×4))`.
-Agreement is dependency-free bag-of-words cosine (swap in embeddings without other changes).
+Agreement is cosine similarity, measured one of two ways:
+
+- **Word overlap** (default): bag-of-words cosine. No extra service, but it reads meaning
+  poorly — "died in 1912" vs "his death occurred in the year 1912" scores 0.38.
+- **Embeddings** (`EMBEDDINGS_BASE_URL` set): cosine of sentence embeddings from a second
+  llama-server, e.g. `llama-server -hf second-state/All-MiniLM-L6-v2-Embedding-GGUF:Q8_0
+  --embeddings --port 8081`. The same 1912 pair scores 0.95, and "Paris is the capital of
+  France" vs "Berlin is the capital of Germany" drops from 0.67 to 0.35.
+
+Neither catches contradictions or changed numbers: "the capital is Sydney" vs "…Canberra"
+scores 0.88 on embeddings and 0.83 on words. That is NLI's job, and is why the number check
+below exists.
 The **medoid** — the sample most similar to all others — is the consensus answer returned.
 
-"Distinct answers" groups rewordings: two samples are one answer when their cosine is ≥ 0.8
+"Distinct answers" groups rewordings: two samples are one answer when their similarity
+clears a cut-off (0.8 for words, 0.9 for embeddings, since a contradiction scored 0.88)
 **and** they state the same numbers. Counting exact strings instead made every long sample
 distinct at temperature 0.7, so `ToolReliability` sat at 4 on every live step and carried no
 information. The number check matters because word overlap alone calls "3 users" and
@@ -57,9 +69,15 @@ The replanner acts on it (`nodes/replanner.py`):
 - Every completed step is shown to it with its confidence, and the prompt asks it to
   re-check or flag anything below 0.5.
 - **Hard rule:** if the step just run scored below 0.5, the replanner queues
-  `Re-check: <step>` without consulting the model. A re-check is never re-checked.
+  `Re-check: <step>` without consulting the model. A re-check is never re-checked, and a
+  step where every sample refused ("I don't have access…") is not re-checked at all —
+  asking again can't produce data the model doesn't have.
 - It stops after `MAX_STEPS` steps, and drops steps that are a completed step with its old
   result tacked on (`"step: result…"`) — a live 3B model looped on exactly that.
+
+If the replanner never writes a clean final answer, the fallback joins the step results,
+using each re-check's result instead of the attempt it replaced and listing identical
+results once.
 
 The run's reported `confidence_score` is its **weakest** step, counting each step's latest
 attempt (a re-check replaces the attempt it re-checked); `step_confidences` lists them all.
@@ -82,6 +100,8 @@ separately until they share that file or a store.
 | `EXECUTOR_SAMPLES` | 4 | samples per step (1 disables self-consistency) |
 | `EXECUTOR_TEMPERATURE` | 0.7 | sampling temperature |
 | `EXECUTOR_EVIDENCE` | `self-consistency` | `keywords` opts into the legacy extractor |
+| `EMBEDDINGS_BASE_URL` | unset | embedding server for meaning-based agreement; unset = word overlap |
+| `EMBEDDINGS_MODEL` | `local-embeddings` | name recorded in eval provenance |
 | `MAX_STEPS` | 10 | executed steps before the run stops and returns what it has |
 | `ENGINE_STATE_PATH` | unset | file the engine's learned counts are saved to / loaded from |
 
@@ -107,6 +127,7 @@ Bayesian layer at all. See [CALIBRATION.md](CALIBRATION.md).
 
 ## Limitations
 
-Lexical agreement can miss paraphrases (embeddings fix this); N samples cost N× tokens; and
+Word-overlap agreement misses paraphrases (embeddings fix this); neither measure sees
+contradictions; N samples cost N× tokens; and
 self-consistency measures *internal* consistency, not factual truth, which is a confidence signal,
 not an oracle.

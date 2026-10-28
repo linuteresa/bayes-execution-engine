@@ -10,13 +10,12 @@ update** driven by how consistently the model answers, and acts on that score: a
 low-confidence step is re-checked, and the replanner sees every step's confidence.
 
 Whether that confidence is actually *calibrated* is a falsifiable claim, so the repo ships
-the harness that tests it and reports what it found: on 500 TriviaQA + GSM8K items the
-confidence is well calibrated (ECE 0.163, less than half either baseline) and, on factual
-recall, genuinely discriminative — **abstaining on the least-confident half lifts accuracy
-from 0.42 to 0.61**. It also reports where the signal fails. See
-**[Calibration](#calibration-measuring-the-confidence-claim)**. (Those numbers predate two
-evidence changes — reworded answers now count as one answer for `ToolReliability`, and the
-step prompt forbids inventing data — so they need a re-run to stay current.)
+the harness that tests it and reports what it found: on 500 TriviaQA + GSM8K items, with
+embedding-based agreement, the confidence ranks right above wrong answers at **AUROC 0.654**
+(beating raw agreement, tying token logprob) with ECE 0.144, about a third of either baseline.
+On factual recall it is genuinely discriminative — **abstaining on the least-confident half
+lifts accuracy from 0.43 to 0.60**. It also reports where the signal fails, and one trade-off
+the latest changes introduced. See **[Calibration](#calibration-measuring-the-confidence-claim)**.
 
 ---
 
@@ -48,6 +47,12 @@ ordinal signals — `DataQuality` (agreement), `TaskStatus` (answerability), `To
 (answer dispersion) — and feeds them to the Bayesian engine. The medoid (consensus) answer
 flows on; the agreement drives confidence. So conflicts fire on **genuine model
 uncertainty**, not keywords.
+
+Agreement is word-overlap cosine by default. Point `EMBEDDINGS_BASE_URL` at a second
+llama-server running a small embedding model and it compares **meaning** instead ("died in
+1912" vs "his death occurred in 1912": 0.38 on words, 0.95 on embeddings). Neither measure
+catches contradictions, so two samples only count as the same answer if they also state the
+same numbers.
 
 **One evidence path.** With no model the executor swaps in a deterministic *mock tool* that
 sometimes returns conflicting readings — but its samples are measured exactly like a live
@@ -128,7 +133,57 @@ items: raw self-consistency agreement on its own, and mean token logprob. If the
 table doesn't beat plain agreement, that is a result too, and the report says so in those
 words — `test_verdict_calls_out_a_losing_engine` pins that behaviour.
 
-### Results
+### Results (current code)
+
+500 items (250 TriviaQA + 250 GSM8K, the same items as the first run), 4 samples each,
+Qwen2.5-3B-Instruct Q4_K_M on llama-server. Sampled **once** with `--keep-samples`, then the
+identical samples were scored under both agreement measures with `--model replay:`, so the
+comparison below is the measure and nothing else. Reports:
+**[embeddings](eval/results/embeddings/REPORT.md)** ·
+**[word-overlap](eval/results/word-overlap/REPORT.md)**.
+
+| Confidence signal | ECE ↓ | Brier ↓ | AUROC ↑ |
+|---|---|---|---|
+| **Engine, embedding agreement** | **0.144** | **0.246** [0.233, 0.258] | **0.654** [0.605, 0.701] |
+| Engine, word-overlap agreement | 0.145 | 0.259 [0.245, 0.273] | 0.601 [0.553, 0.651] |
+| Baseline: raw embedding agreement | 0.434 | 0.424 | 0.617 |
+| Baseline: mean token logprob | 0.424 | 0.406 | 0.654 |
+
+**Embeddings help, and the gain is real.** On identical samples, switching the measure moves
+AUROC **+0.053 [+0.024, +0.082]** and Brier −0.013 [−0.022, −0.006] (paired bootstrap, both
+exclude 0); ECE is unchanged. With embeddings the engine now beats raw agreement on AUROC
+(+0.037 [+0.004, +0.072]) and ties token logprob, which it used to lose to.
+
+The gain is all on factual recall:
+
+| Dataset | Words AUROC | **Embeddings AUROC** | Δ [95% CI] | Acc @100% → @50% (emb) |
+|---|---|---|---|---|
+| TriviaQA | 0.647 | **0.743** [0.680, 0.797] | **+0.096** [+0.058, +0.137] | 0.432 → **0.600** |
+| GSM8K | 0.549 | 0.554 [0.480, 0.623] | +0.005 [−0.034, +0.044] | 0.392 → 0.448 |
+
+**A trade-off the latest changes made.** `ToolReliability` used to count exact strings; it now
+groups rewordings. Re-scoring the same samples with the old rule isolates that change:
+
+| AUROC | Old exact-string count | New grouped count |
+|---|---|---|
+| TriviaQA, words | **0.720** | 0.647 |
+| TriviaQA, embeddings | 0.741 | **0.743** |
+| GSM8K, words | 0.444 | 0.549 |
+| GSM8K, embeddings | 0.436 | **0.554** |
+
+Grouping costs trivia discrimination under word overlap and buys it back on maths; under
+embeddings it is free on trivia. But it raises the hand-built prior's ECE (0.087 → 0.145 on
+words), because `ToolReliability` now sits at 4 less often (trivia: 32% → 11% of items) and
+confidences rise. Learning from feedback recovers most of that on held-out items — words
+0.141 → 0.042, embeddings 0.138 → 0.085 — but the old rule on words still calibrates best after
+learning (0.027), while embeddings with the new rule discriminate best (held-out AUROC 0.68
+vs 0.60). Which to prefer depends on whether ranking or honest probabilities matters more.
+
+Accuracy differs from the first run (GSM8K 0.22 → 0.39) because the model build, server and
+step prompt all changed; the two runs aren't a controlled comparison, only the measures above
+are.
+
+### First run (before the evidence changes)
 
 500 items (250 TriviaQA + 250 GSM8K), 4 samples each, `qwen2.5:3b-instruct` served locally.
 Full report: **[eval/results/REPORT.md](eval/results/REPORT.md)**.
@@ -232,6 +287,8 @@ Full walkthrough with expected outputs in **[QUICKSTART.md](QUICKSTART.md)**. Lo
 
 ```bash
 llama-server -m ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080  
+# optional, meaning-based agreement (then set EMBEDDINGS_BASE_URL=http://localhost:8081/v1)
+llama-server -hf second-state/All-MiniLM-L6-v2-Embedding-GGUF:Q8_0 --embeddings --port 8081
 pip install -r requirements.txt                                        
 python main.py "Compare REST and gRPC and when to use each."           
 python app.py                                                         
@@ -239,8 +296,8 @@ uvicorn service.api:app --port 8000
 ```
 
 Or `docker compose up` (engine + model server). Config via env vars (`.env`):
-`LLAMA_CPP_BASE_URL`, `EXECUTOR_SAMPLES`, `MAX_STEPS`, `ENGINE_STATE_PATH`, `JOB_STORE`,
-`CHECKPOINTER`, `LOG_LEVEL`.
+`LLAMA_CPP_BASE_URL`, `EXECUTOR_SAMPLES`, `EMBEDDINGS_BASE_URL`, `MAX_STEPS`,
+`ENGINE_STATE_PATH`, `JOB_STORE`, `CHECKPOINTER`, `LOG_LEVEL`.
 
 ---
 
@@ -260,7 +317,7 @@ Detail: [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md).
 
 ## Testing
 
-**160 unit tests** (conjugate updates, prior monotonicity, self-consistency, evidence-path
+**169 unit tests** (conjugate updates, prior monotonicity, self-consistency, evidence-path
 routing, calibration metrics, grading, the learning loop, JSON parsing, DAG routing, scaling,
 job store). Run `pytest`. The Bayesian core is deterministic and the eval has an offline
 answerer, so the whole suite — including the full calibration pipeline end to end — runs with
@@ -277,11 +334,12 @@ no model and no network.
   `eval/learning.py` fits the posterior on a train split and scores it held-out, and the
   service learns from `POST /jobs/{id}/feedback` (persisted via `ENGINE_STATE_PATH`). The
   verdict is per run, so every step gets the same outcome — coarse credit assignment.
-- **Beat chance on arithmetic** — the measured GSM8K AUROC is 0.529 (CI straddles 0.5).
+- **Beat chance on arithmetic** — GSM8K AUROC is 0.554 with embeddings (CI still straddles 0.5).
   Agreement can't separate "consistently right" from "consistently wrong", so this needs a
   signal that isn't self-agreement: verifier sampling, or execution of the derived arithmetic.
-- **Semantic agreement** — swap bag-of-words cosine for embeddings/NLI (interface ready).
-  Now measurable: re-run `eval/` and compare, rather than asserting it helped.
+- ~~**Semantic agreement** — swap bag-of-words cosine for embeddings.~~ Built and measured:
+  AUROC +0.053 [+0.024, +0.082] on identical samples, all of it on factual recall. Still open:
+  NLI, since neither measure catches contradictions ("Sydney" vs "Canberra": 0.88).
 - **Confidence-driven control** — partly built: steps below 0.5 get one forced re-check and
   the replanner sees every score. Still open: using the credible interval, escalating, asking.
 - **Real tools behind the executor** — typed tools/MCP; drive conflict from multi-source

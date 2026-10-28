@@ -29,7 +29,7 @@ from bayesian_engine.bayes_engine import (
 from eval.answerers import is_simulated
 from eval.datasets import EvalItem
 from eval.grading import grade
-from nodes.llm_executor import execute_step_with_llm
+from nodes.llm_executor import execute_step_with_llm, similarity_backend
 
 SIGNAL_KEYS = (
     "agreement_mean",
@@ -235,6 +235,7 @@ def run_metadata(answerer, items, *, n_samples: int, dataset_spec: str) -> dict:
         "dataset_spec": dataset_spec,
         "n_items": len(items),
         "n_samples_per_item": n_samples,
+        "similarity": similarity_backend(),
     }
 
 

@@ -19,9 +19,9 @@ from *real measurements*, not keywords:
 * ``ToolReliability``-- answer dispersion: how many distinct answers were produced.
 
 The medoid (the sample most similar to all the others) is returned as the consensus
-answer. Agreement is measured with dependency-free bag-of-words cosine similarity, so
-nothing beyond the standard library + numpy is required; swap in embeddings for a
-semantic upgrade without changing the interface.
+answer. Agreement is bag-of-words cosine by default (no extra service needed), or
+embedding cosine when ``EMBEDDINGS_BASE_URL`` points at an embedding server -- see
+``_similarity_matrix``. Both feed the same evidence computation.
 """
 
 from __future__ import annotations
@@ -31,6 +31,10 @@ import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+
+import numpy as np
+
+from core.llm import build_embeddings
 
 _WORD = re.compile(r"[a-z0-9]+")
 _REFUSAL_MARKERS = (
@@ -47,9 +51,11 @@ _REFUSAL_MARKERS = (
     "don't have access",
     "do not have access",
 )
-#: Two samples at least this similar are the same answer, reworded. Bag-of-words
-#: cosine, so this is a word-overlap threshold, not a semantic one.
+#: Two samples at least this similar are the same answer, reworded. Word overlap and
+#: embeddings need different cut-offs: on MiniLM, true rewordings scored 0.95-0.97 but a
+#: contradiction ("Sydney" vs "Canberra") scored 0.88, so 0.8 would merge them.
 _SAME_ANSWER = 0.8
+_SAME_ANSWER_EMBEDDINGS = 0.9
 
 
 @dataclass
@@ -105,6 +111,32 @@ def _cosine(a: Counter, b: Counter) -> float:
     return max(0.0, min(1.0, num / (na * nb)))
 
 
+def similarity_backend() -> str:
+    """Which agreement measure is active, for provenance: runs on different ones differ."""
+    if os.getenv("EMBEDDINGS_BASE_URL"):
+        return f"embeddings:{os.getenv('EMBEDDINGS_MODEL', 'local-embeddings')}"
+    return "word-overlap"
+
+
+def _similarity_matrix(samples: list[str], vecs: list[Counter]) -> tuple[list[list[float]], float]:
+    """Pairwise similarity in [0, 1], plus the "same answer" cut-off for that measure.
+
+    Word overlap by default. With ``EMBEDDINGS_BASE_URL`` set, cosine of embeddings, so
+    "Yes." and "Correct, that's right." agree although they share no words.
+    """
+    n = len(samples)
+    embedder = build_embeddings()
+    if embedder is None:
+        return [[_cosine(vecs[i], vecs[j]) for j in range(n)] for i in range(n)], _SAME_ANSWER
+
+    u = np.array(embedder.embed_documents([s or " " for s in samples]), dtype=float)
+    u /= np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-12)
+    sim = np.clip(u @ u.T, 0.0, 1.0)  # unrelated text can dip below 0
+    nonempty = np.array([bool(s) for s in samples])
+    sim *= np.outer(nonempty, nonempty)  # an empty sample agrees with nothing, as with words
+    return sim.tolist(), _SAME_ANSWER_EMBEDDINGS
+
+
 def _is_degenerate(s: str) -> bool:
     text = s.strip().lower()
     if len(_WORD.findall(text)) < 2:
@@ -112,7 +144,7 @@ def _is_degenerate(s: str) -> bool:
     return any(marker in text for marker in _REFUSAL_MARKERS)
 
 
-def _count_distinct(vecs: list[Counter]) -> int:
+def _count_distinct(vecs: list[Counter], sim: list[list[float]], same_answer: float) -> int:
     """Number of different answers, grouping rewordings of the same one.
 
     Counting exact strings made every long sample "distinct" at temperature > 0, so
@@ -121,10 +153,10 @@ def _count_distinct(vecs: list[Counter]) -> int:
     Word overlap can't see that "3 users" and "12 users" disagree, so two samples are
     only the same answer if they also state the same numbers.
     """
-    reps: list[Counter] = []
-    for v in vecs:
-        if not any(_cosine(v, r) >= _SAME_ANSWER and _numbers(v) == _numbers(r) for r in reps):
-            reps.append(v)
+    reps: list[int] = []
+    for i, v in enumerate(vecs):
+        if not any(sim[i][r] >= same_answer and _numbers(v) == _numbers(vecs[r]) for r in reps):
+            reps.append(i)
     return len(reps)
 
 
@@ -149,15 +181,12 @@ def execute_step_with_llm(
 
     samples = [_sample_once(model, step, goal) for _ in range(n)]
     vecs = [_vec(s) for s in samples]
+    sim, same_answer = _similarity_matrix(samples, vecs)
 
-    # Pairwise semantic agreement.
+    # Pairwise agreement.
     sims: list[float] = []
     if n > 1:
-        sims = [
-            _cosine(vecs[i], vecs[j])
-            for i in range(n)
-            for j in range(i + 1, n)
-        ]
+        sims = [sim[i][j] for i in range(n) for j in range(i + 1, n)]
         consistency = sum(sims) / len(sims) if sims else 1.0
     else:
         consistency = 1.0
@@ -165,14 +194,15 @@ def execute_step_with_llm(
 
     best_idx, best_score = 0, -1.0
     for i in range(n):
-        score = sum(_cosine(vecs[i], vecs[j]) for j in range(n) if j != i)
+        score = sum(sim[i][j] for j in range(n) if j != i)
         if score > best_score:
             best_idx, best_score = i, score
     answer = samples[best_idx] if samples else ""
 
 
     answerability = sum(1 for s in samples if not _is_degenerate(s)) / n
-    distinct_ratio = (_count_distinct(vecs) - 1) / (n - 1) if n > 1 else 0.0
+    distinct = _count_distinct(vecs, sim, same_answer)
+    distinct_ratio = (distinct - 1) / (n - 1) if n > 1 else 0.0
 
     evidence = {
         "TaskStatus": _clip4((1.0 - answerability) * 4),

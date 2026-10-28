@@ -86,8 +86,18 @@ def replanner_node(state: PlanExecuteState, config):
         return {"response": f"Stopped after {len(past_steps)} steps without a final answer. "
                             f"Results so far: {_fallback_summary(past_steps)}"}
 
-    # Hard rule: a low-confidence step gets one reworded retry, whatever the model thinks.
-    if past_steps and len(confidences) == len(past_steps) and confidences[-1] < LOW_CONFIDENCE:
+    # Hard rule: a low-confidence step gets one reworded retry, whatever the model thinks --
+    # unless every sample refused, since asking again can't produce data the model lacks.
+    evidence = state.get("step_evidence", [])
+    all_refused = (
+        bool(evidence) and len(evidence) == len(past_steps) and evidence[-1]["TaskStatus"] == 4
+    )
+    if (
+        past_steps
+        and len(confidences) == len(past_steps)
+        and confidences[-1] < LOW_CONFIDENCE
+        and not all_refused
+    ):
         last_task = past_steps[-1][0]
         if not last_task.startswith(RECHECK_PREFIX):
             return {"plan": [RECHECK_PREFIX + last_task] + current_plan}
@@ -138,4 +148,8 @@ def _fallback_summary(past_steps) -> str:
     instead of an opaque error so the run still returns something useful."""
     if not past_steps:
         return "No results were produced."
-    return " ".join(result for _, result in past_steps).strip()
+    # A re-check supersedes the attempt it re-checked; identical results appear once.
+    latest: dict[str, str] = {}
+    for task, result in past_steps:
+        latest[task.removeprefix(RECHECK_PREFIX)] = result
+    return " ".join(dict.fromkeys(r.strip() for r in latest.values() if r.strip()))

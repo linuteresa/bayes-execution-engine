@@ -164,3 +164,34 @@ def test_feedback_needs_a_finished_job(fresh_engine):
     with pytest.raises(HTTPException) as exc:
         api.submit_feedback("no-such-job", FeedbackRequest(correct=True))
     assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------- refusals and fallback
+def test_a_step_every_sample_refused_is_not_rechecked(monkeypatch):
+    """Asking again cannot produce data the model does not have; skip the wasted retry."""
+    calls = []
+
+    class FakeReplanner:
+        def invoke(self, payload):
+            calls.append(payload)
+            return '{"action": "response", "response": "no data available"}'
+
+    monkeypatch.setattr("nodes.replanner.create_replanner", lambda _model: FakeReplanner())
+    state = _state([("list users", "I do not have access")], [0.3])
+    state["step_evidence"] = [{"TaskStatus": 4, "DataQuality": 0, "ToolReliability": 0}]
+
+    assert replanner_node(state, {"configurable": {"model": object()}}) == {
+        "response": "no data available"
+    }
+
+
+def test_fallback_answer_has_no_repeats_and_prefers_the_recheck():
+    from nodes.replanner import _fallback_summary
+
+    steps = [
+        ("count users", "maybe 5"),
+        ("Re-check: count users", "There are 5 users."),
+        ("list tasks", "No access."),
+        ("list owners", "No access."),
+    ]
+    assert _fallback_summary(steps) == "There are 5 users. No access."

@@ -356,6 +356,7 @@ def render_report(results: dict) -> str:
         f"| Dataset spec | `{meta.get('dataset_spec', 'unknown')}` |",
         f"| Items | {meta.get('n_items', dataset.get('n_items', 0))} |",
         f"| Samples per item | {meta.get('n_samples_per_item', 0)} |",
+        f"| Agreement measure | `{meta.get('similarity', 'unknown')}` |",
         "",
         "Composition: "
         + ", ".join(f"{k} × {v}" for k, v in (dataset.get("by_difficulty") or {}).items())

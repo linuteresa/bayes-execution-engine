@@ -3,6 +3,8 @@
     python -m eval.run_eval --model llama --dataset hf:triviaqa+hf:gsm8k --limit 200
     python -m eval.run_eval --model sim --dataset bundled        # offline smoke test
     python -m eval.run_eval --rows eval/results/rows.jsonl       # re-analyse, no model
+    EMBEDDINGS_BASE_URL=http://localhost:8081/v1 \
+      python -m eval.run_eval --model replay:eval/results/word-overlap/rows.jsonl  # re-score samples
 
 Stages: collect rows (the only stage that touches the model) -> score the engine and the
 baselines -> run the learning study -> render figures and a markdown report. Because the
@@ -52,8 +54,11 @@ def _logprob_confidence(rows: Sequence[EvalRow]) -> Optional[List[float]]:
 
 
 def collect_rows(args: argparse.Namespace) -> tuple[List[EvalRow], dict]:
-    items = load_items(args.dataset, limit=args.limit, seed=args.seed)
     answerer = build_answerer(args.model, temperature=args.temperature, seed=args.seed)
+    # A replay brings its own items: the exact questions whose samples it stored.
+    items = getattr(answerer, "items", None) or load_items(
+        args.dataset, limit=args.limit, seed=args.seed
+    )
 
     if is_simulated(answerer):
         print(
@@ -244,7 +249,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default="sim",
         help="'llama' for the local llama.cpp server (the reportable path), "
-        "'sim' for the offline stand-in (default: sim)",
+        "'sim' for the offline stand-in, 'replay:<rows.jsonl>' to re-score a run's "
+        "stored samples under the current agreement measure (default: sim)",
     )
     p.add_argument(
         "--dataset",
