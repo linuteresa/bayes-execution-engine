@@ -6,6 +6,7 @@
 
 A run makes several LLM calls (tens of seconds), so it can't sit in a sync request. Contract
 (`service/api.py`): `POST /jobs {question}` → `202 {job_id}` (instant) → poll `GET /jobs/{id}`.
+`POST /jobs/{id}/feedback {correct}` feeds a verdict on a finished job back into the engine.
 In-repo the worker is a `ThreadPoolExecutor`; swap it for a broker + workers with the same
 contract. `_run_job` is already the unit a Celery task would wrap.
 

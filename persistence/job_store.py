@@ -30,6 +30,8 @@ class Job:
     prompt: str = ""
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    #: User verdict on the answer, once given; ``None`` until then.
+    feedback: Optional[bool] = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 

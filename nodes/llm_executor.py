@@ -44,7 +44,12 @@ _REFUSAL_MARKERS = (
     "no information",
     "as an ai",
     "i cannot",
+    "don't have access",
+    "do not have access",
 )
+#: Two samples at least this similar are the same answer, reworded. Bag-of-words
+#: cosine, so this is a word-overlap threshold, not a semantic one.
+_SAME_ANSWER = 0.8
 
 
 @dataclass
@@ -70,7 +75,9 @@ def _sample_once(model, step: str, goal: str) -> str:
         "You are executing ONE step of a larger plan.\n"
         f"Overall goal: {goal}\n"
         f"Step to execute: {step}\n"
-        "Return only the concise, factual result of this step."
+        "Return only the concise, factual result of this step.\n"
+        "You have no access to any database, file or live system. If the step needs data "
+        "you do not have, say so plainly. Never invent names, IDs, numbers or records."
     )
     return _content(model.invoke(prompt))
 
@@ -103,6 +110,26 @@ def _is_degenerate(s: str) -> bool:
     if len(_WORD.findall(text)) < 2:
         return True
     return any(marker in text for marker in _REFUSAL_MARKERS)
+
+
+def _count_distinct(vecs: list[Counter]) -> int:
+    """Number of different answers, grouping rewordings of the same one.
+
+    Counting exact strings made every long sample "distinct" at temperature > 0, so
+    ToolReliability saturated at its worst value and carried no information.
+
+    Word overlap can't see that "3 users" and "12 users" disagree, so two samples are
+    only the same answer if they also state the same numbers.
+    """
+    reps: list[Counter] = []
+    for v in vecs:
+        if not any(_cosine(v, r) >= _SAME_ANSWER and _numbers(v) == _numbers(r) for r in reps):
+            reps.append(v)
+    return len(reps)
+
+
+def _numbers(v: Counter) -> set[str]:
+    return {t for t in v if t.isdigit()}
 
 
 def _clip4(x: float) -> int:
@@ -145,8 +172,7 @@ def execute_step_with_llm(
 
 
     answerability = sum(1 for s in samples if not _is_degenerate(s)) / n
-    normalised = {re.sub(r"\s+", " ", s.strip().lower()) for s in samples}
-    distinct_ratio = (len(normalised) - 1) / (n - 1) if n > 1 else 0.0
+    distinct_ratio = (_count_distinct(vecs) - 1) / (n - 1) if n > 1 else 0.0
 
     evidence = {
         "TaskStatus": _clip4((1.0 - answerability) * 4),

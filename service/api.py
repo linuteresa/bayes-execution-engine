@@ -23,12 +23,15 @@ Run with:  uvicorn service.api:app --host 0.0.0.0 --port 8000
 
 from __future__ import annotations
 
+import os
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from bayesian_engine.bayes_engine import get_default_engine, outcome_label
 from core.graph import run_execution_engine
 from core.telemetry import log_event
 from persistence.checkpointer import build_checkpointer
@@ -38,6 +41,7 @@ app = FastAPI(title="Bayes Execution Engine", version="1.0.0")
 
 _store = build_job_store()
 _pool = ThreadPoolExecutor(max_workers=8)
+_feedback_lock = threading.Lock()
 
 
 class AskRequest(BaseModel):
@@ -48,6 +52,10 @@ class AskRequest(BaseModel):
 class JobAccepted(BaseModel):
     job_id: str
     status: str
+
+
+class FeedbackRequest(BaseModel):
+    correct: bool = Field(..., description="Was the job's final answer right?")
 
 
 def _run_job(job_id: str, question: str, thread_id: str) -> None:
@@ -87,3 +95,35 @@ def get_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return job.to_dict()
+
+
+@app.post("/jobs/{job_id}/feedback")
+def submit_feedback(job_id: str, req: FeedbackRequest) -> dict:
+    """Teach the engine from a verdict on a finished job.
+
+    The verdict is per run, so every step's evidence gets the same outcome -- coarse
+    credit assignment, but the same conjugate update the calibration eval uses.
+    """
+    with _feedback_lock:  # check-then-write, so two verdicts for one job can't both land
+        job = _store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        if job.status != "done":
+            raise HTTPException(status_code=409, detail=f"job is {job.status}, not done")
+        if job.feedback is not None:
+            raise HTTPException(status_code=409, detail="feedback already recorded")
+
+        engine = get_default_engine()
+        evidence = (job.result or {}).get("step_evidence", [])
+        for ev in evidence:
+            engine.observe(
+                ev["TaskStatus"], ev["DataQuality"], ev["ToolReliability"],
+                outcome_label(req.correct),
+            )
+        path = os.getenv("ENGINE_STATE_PATH")
+        if path:
+            engine.save(path)
+        _store.update(job_id, feedback=req.correct)
+
+    log_event("job.feedback", job_id=job_id, correct=req.correct, observations=len(evidence))
+    return {"job_id": job_id, "observations": len(evidence)}

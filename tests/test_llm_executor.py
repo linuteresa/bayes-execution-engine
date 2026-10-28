@@ -96,3 +96,46 @@ def test_executor_falls_back_to_mock_without_model():
     result = executor_node(_state(["query the database"]), config=None)
     assert "query_result" in result["past_steps"][0][1]
     assert 0.0 < result["confidence_score"] < 1.0
+
+
+def test_paraphrases_count_as_one_answer():
+    """Reworded copies of one answer are not 'distinct answers'; exact-text dedup said they were."""
+    model = FakeModel([
+        "The system has five active users today.",
+        "Today the system has five active users.",
+        "The system has five active users today!",
+        "Five active users are on the system today.",
+    ])
+    r = execute_step_with_llm(model, "count active users", n_samples=4)
+    assert r.evidence["ToolReliability"] == 0
+
+
+def test_no_access_answer_counts_as_unanswered():
+    """An honest 'I don't have that data' must lower confidence, not read as a real answer."""
+    model = FakeModel(["I don't have access to the user database for this system."])
+    r = execute_step_with_llm(model, "list active users", n_samples=4)
+    assert r.evidence["TaskStatus"] == 4
+
+
+def test_step_prompt_forbids_inventing_data():
+    seen = []
+
+    class CapturingModel(FakeModel):
+        def invoke(self, prompt):
+            seen.append(prompt)
+            return super().invoke(prompt)
+
+    execute_step_with_llm(CapturingModel(["ok done"]), "list active users", n_samples=1)
+    assert "never invent" in seen[0].lower()
+
+
+def test_answers_with_different_numbers_are_different_answers():
+    """Word overlap alone calls '3 users' and '12 users' the same answer; the numbers decide."""
+    model = FakeModel([
+        "There are 3 active users today.",
+        "There are 12 active users today.",
+        "There are 5 active users today.",
+        "There are 7 active users today.",
+    ])
+    r = execute_step_with_llm(model, "count active users", n_samples=4)
+    assert r.evidence["ToolReliability"] == 4

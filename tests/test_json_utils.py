@@ -38,3 +38,9 @@ def test_unparseable_returns_none():
 def test_skips_unparseable_then_finds_valid():
     text = '{broken json} and later {"ok": true}'
     assert extract_json(text) == {"ok": True}
+
+
+def test_raw_newlines_inside_strings():
+    """Small models emit multi-line answers with literal newlines; dropping them lost a real final answer."""
+    text = '{"action": "response", "response": "Users:\n\n- U001\n- U002"}'
+    assert extract_json(text) == {"action": "response", "response": "Users:\n\n- U001\n- U002"}

@@ -5,27 +5,34 @@ served behind an **async API**, running entirely on a **local LLM** via
 [llama.cpp](https://github.com/ggml-org/llama.cpp).
 
 Standard agents "guess again" on conflicting data and loop or hallucinate. This engine
-decouples *planning* from *doing*, and gates each step's confidence on a **real Bayesian
-update** driven by how consistently the model answers.
+decouples *planning* from *doing*, scores each step's confidence with a **real Bayesian
+update** driven by how consistently the model answers, and acts on that score: a
+low-confidence step is re-checked, and the replanner sees every step's confidence.
 
 Whether that confidence is actually *calibrated* is a falsifiable claim, so the repo ships
 the harness that tests it and reports what it found: on 500 TriviaQA + GSM8K items the
 confidence is well calibrated (ECE 0.163, less than half either baseline) and, on factual
 recall, genuinely discriminative — **abstaining on the least-confident half lifts accuracy
 from 0.42 to 0.61**. It also reports where the signal fails. See
-**[Calibration](#calibration-measuring-the-confidence-claim)**.
+**[Calibration](#calibration-measuring-the-confidence-claim)**. (Those numbers predate two
+evidence changes — reworded answers now count as one answer for `ToolReliability`, and the
+step prompt forbids inventing data — so they need a re-run to stay current.)
 
 ---
 
 ## Architecture
 
 A LangGraph `StateGraph`: a shared `PlanExecuteState` flows Planner → Executor →
-Replanner; the executor calls the Bayesian engine when a step is uncertain.
+Replanner; the executor calls the Bayesian engine when a step is uncertain. The replanner
+sees each step's confidence, re-checks any step below 0.5 once (a hard rule in code, not a
+prompt), and stops after `MAX_STEPS`. The run's reported confidence is its weakest step,
+counting a re-check in place of the attempt it re-checked.
 
 ![architecture](img.png)
 
 For long-running prompts an async API decouples the work so HTTP requests never time out
-(`POST /jobs` → poll `GET /jobs/{id}`). In-repo that's a `ThreadPoolExecutor`; the same
+(`POST /jobs` → poll `GET /jobs/{id}`; `POST /jobs/{id}/feedback {correct}` teaches the
+engine from a verdict on the answer). In-repo that's a `ThreadPoolExecutor`; the same
 contract maps to a Kafka/RabbitMQ + Celery deployment — see
 [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md).
 
@@ -88,7 +95,7 @@ resolve_conflict({"TaskStatus": 4, "DataQuality": 4, "ToolReliability": 4})
 #  "effective_sample_size": 13.0, ...}
 ```
 
-Two pairs, deliberately distinct: the executor gates on `good_confidence`, so that is the one
+Two pairs, deliberately distinct: the system reports and acts on `good_confidence`, so that is the one
 with `good_credible_interval` around it. Pairing a confidence with the other interval attaches
 a band to a quantity it doesn't describe — it need not even contain the number.
 
@@ -232,7 +239,8 @@ uvicorn service.api:app --port 8000
 ```
 
 Or `docker compose up` (engine + model server). Config via env vars (`.env`):
-`LLAMA_CPP_BASE_URL`, `EXECUTOR_SAMPLES`, `JOB_STORE`, `CHECKPOINTER`, `LOG_LEVEL`.
+`LLAMA_CPP_BASE_URL`, `EXECUTOR_SAMPLES`, `MAX_STEPS`, `ENGINE_STATE_PATH`, `JOB_STORE`,
+`CHECKPOINTER`, `LOG_LEVEL`.
 
 ---
 
@@ -252,7 +260,7 @@ Detail: [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md).
 
 ## Testing
 
-**119 unit tests** (conjugate updates, prior monotonicity, self-consistency, evidence-path
+**160 unit tests** (conjugate updates, prior monotonicity, self-consistency, evidence-path
 routing, calibration metrics, grading, the learning loop, JSON parsing, DAG routing, scaling,
 job store). Run `pytest`. The Bayesian core is deterministic and the eval has an offline
 answerer, so the whole suite — including the full calibration pipeline end to end — runs with
@@ -266,15 +274,19 @@ no model and no network.
   Built: `eval/`, [docs/CALIBRATION.md](docs/CALIBRATION.md). Headline numbers pending a run
   against a live model.
 - ~~**Online CPT learning** — feed `(evidence, outcome)` back via `engine.observe`.~~ Built:
-  `eval/learning.py` fits the posterior on a train split and scores it held-out.
+  `eval/learning.py` fits the posterior on a train split and scores it held-out, and the
+  service learns from `POST /jobs/{id}/feedback` (persisted via `ENGINE_STATE_PATH`). The
+  verdict is per run, so every step gets the same outcome — coarse credit assignment.
 - **Beat chance on arithmetic** — the measured GSM8K AUROC is 0.529 (CI straddles 0.5).
   Agreement can't separate "consistently right" from "consistently wrong", so this needs a
   signal that isn't self-agreement: verifier sampling, or execution of the derived arithmetic.
 - **Semantic agreement** — swap bag-of-words cosine for embeddings/NLI (interface ready).
   Now measurable: re-run `eval/` and compare, rather than asserting it helped.
-- **Confidence-driven control** — use the credible interval to re-plan / escalate / ask.
+- **Confidence-driven control** — partly built: steps below 0.5 get one forced re-check and
+  the replanner sees every score. Still open: using the credible interval, escalating, asking.
 - **Real tools behind the executor** — typed tools/MCP; drive conflict from multi-source
-  disagreement.
+  disagreement. Until then the step prompt tells the model it has no data access and must
+  not invent records; a live run without that invented user tables.
 - **Broker-backed scaling** — Kafka/RabbitMQ + Celery + shared checkpointer.
 
 ---

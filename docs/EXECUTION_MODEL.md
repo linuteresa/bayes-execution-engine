@@ -20,6 +20,7 @@ flowchart TD
     MEDOID --> REPLAN[Replanner]
     CONFLICT --> REPLAN
     ACCEPT --> REPLAN
+    REPLAN -->|confidence < 0.5: one re-check| STEP
     REPLAN -->|more steps| STEP
     REPLAN -->|done| FINAL[Final answer]
 ```
@@ -30,21 +31,49 @@ flowchart TD
 |---|---|---|
 | `DataQuality` | mean pairwise agreement of samples | low agreement ⇒ degraded |
 | `TaskStatus` | fraction of non-refusal/non-empty samples | refusals ⇒ degraded |
-| `ToolReliability` | distinct answers / N | high dispersion ⇒ unstable |
+| `ToolReliability` | distinct answers / N (rewordings grouped) | high dispersion ⇒ unstable |
 
 Each maps onto `0 = CERTAIN … 4 = AMBIGUOUS`, e.g. `DataQuality = clip(round((1−agreement)×4))`.
 Agreement is dependency-free bag-of-words cosine (swap in embeddings without other changes).
 The **medoid** — the sample most similar to all others — is the consensus answer returned.
 
+"Distinct answers" groups rewordings: two samples are one answer when their cosine is ≥ 0.8
+**and** they state the same numbers. Counting exact strings instead made every long sample
+distinct at temperature 0.7, so `ToolReliability` sat at 4 on every live step and carried no
+information. The number check matters because word overlap alone calls "3 users" and
+"12 users" the same answer.
+
+The step prompt also tells the model it has no data access and must never invent names,
+IDs, numbers or records; "I don't have access…" counts as a refusal for `TaskStatus`.
+
 ## Confidence
 
 The three signals feed `resolve_conflict`, which returns a posterior over outcome quality
 plus a credible interval. The step's scalar confidence is `P(CERTAIN) + P(HIGH)`. When the
-MAP outcome is MEDIUM/LOW/AMBIGUOUS the step is logged as `bayes.conflict_resolved`, and the
-replanner can re-plan or surface the low confidence.
+MAP outcome is MEDIUM/LOW/AMBIGUOUS the step is logged as `bayes.conflict_resolved`.
+
+The replanner acts on it (`nodes/replanner.py`):
+
+- Every completed step is shown to it with its confidence, and the prompt asks it to
+  re-check or flag anything below 0.5.
+- **Hard rule:** if the step just run scored below 0.5, the replanner queues
+  `Re-check: <step>` without consulting the model. A re-check is never re-checked.
+- It stops after `MAX_STEPS` steps, and drops steps that are a completed step with its old
+  result tacked on (`"step: result…"`) — a live 3B model looped on exactly that.
+
+The run's reported `confidence_score` is its **weakest** step, counting each step's latest
+attempt (a re-check replaces the attempt it re-checked); `step_confidences` lists them all.
 
 This is the distinctive bit: the system **quantifies its own uncertainty from the model's
-behaviour** and gates confidence on a principled fusion of three signals.
+behaviour**, fuses three signals into one confidence, and the loop acts on it.
+
+## Learning from feedback
+
+`POST /jobs/{id}/feedback {"correct": true|false}` on a finished job runs the conjugate update
+for every step's evidence (correct → `CERTAIN`, wrong → `AMBIGUOUS`, as in the eval), once
+per job. Set `ENGINE_STATE_PATH` to persist the learned counts across restarts; without it
+learning lasts only for the process. Counts are per process, so replicas each learn
+separately until they share that file or a store.
 
 ## Config & fallback
 
@@ -53,6 +82,8 @@ behaviour** and gates confidence on a principled fusion of three signals.
 | `EXECUTOR_SAMPLES` | 4 | samples per step (1 disables self-consistency) |
 | `EXECUTOR_TEMPERATURE` | 0.7 | sampling temperature |
 | `EXECUTOR_EVIDENCE` | `self-consistency` | `keywords` opts into the legacy extractor |
+| `MAX_STEPS` | 10 | executed steps before the run stops and returns what it has |
+| `ENGINE_STATE_PATH` | unset | file the engine's learned counts are saved to / loaded from |
 
 **One evidence path.** With no model the executor swaps the backend, not the measurement:
 `_MockToolSampler` is a deterministic *fake tool* whose scripted readings sometimes
