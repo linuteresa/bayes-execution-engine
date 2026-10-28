@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 
 def build_llm(temperature: float = 0.0, *, logprobs: bool = False) -> ChatOpenAI:
@@ -37,4 +37,24 @@ def build_llm(temperature: float = 0.0, *, logprobs: bool = False) -> ChatOpenAI
         api_key=os.getenv("LLAMA_CPP_API_KEY", "not-needed"),  # local server: auth disabled
         temperature=temperature,
         **kwargs,
+    )
+
+
+def build_embeddings() -> OpenAIEmbeddings | None:
+    """Embedding client for meaning-based sample agreement, or ``None`` to use word overlap.
+
+    Set ``EMBEDDINGS_BASE_URL`` to a second llama-server started with ``--embeddings``:
+
+        llama-server -hf second-state/All-MiniLM-L6-v2-Embedding-GGUF:Q8_0 --embeddings --port 8081
+    """
+    base_url = os.getenv("EMBEDDINGS_BASE_URL")
+    if not base_url:
+        return None
+    return OpenAIEmbeddings(
+        model=os.getenv("EMBEDDINGS_MODEL", "local-embeddings"),
+        base_url=base_url,
+        api_key=os.getenv("LLAMA_CPP_API_KEY", "not-needed"),
+        # The default pre-tokenizes with tiktoken (OpenAI vocab, network download);
+        # llama-server tokenizes with the model's own vocab, so send raw text.
+        check_embedding_ctx_length=False,
     )

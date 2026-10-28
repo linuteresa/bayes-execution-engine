@@ -16,7 +16,7 @@ from core.state import PlanExecuteState
 from core.telemetry import span
 from nodes.executor import executor_node
 from nodes.planner import planner_node
-from nodes.replanner import replanner_node
+from nodes.replanner import RECHECK_PREFIX, replanner_node
 
 _LLM_UNAVAILABLE_PHRASES = (
     "connection error",
@@ -34,6 +34,18 @@ def should_continue(state: PlanExecuteState) -> Literal["executor", "END"]:
     if state.get("plan"):
         return "executor"
     return "END"
+
+
+def overall_confidence(past_steps, step_confidences) -> float:
+    """Run-level confidence: the weakest step, counting only each step's latest attempt.
+
+    A re-check replaces the attempt it re-checks, so a step that was redone and came
+    back confident no longer drags the run down.
+    """
+    latest: Dict[str, float] = {}
+    for (task, _), conf in zip(past_steps, step_confidences, strict=False):
+        latest[task.removeprefix(RECHECK_PREFIX)] = conf
+    return min(latest.values())
 
 
 def build_graph(checkpointer: Optional[Any] = None):
@@ -73,6 +85,8 @@ def run_execution_engine(
             "input": user_input,
             "plan": [],
             "past_steps": [],
+            "step_confidences": [],
+            "step_evidence": [],
             "response": "",
             "confidence_score": 1.0,
         }
@@ -85,11 +99,19 @@ def run_execution_engine(
         with span("engine.run", input=user_input, thread_id=thread_id):
             final_state = app_graph.invoke(initial_state, config=config)
 
+        past_steps = final_state.get("past_steps", [])
+        step_confidences = final_state.get("step_confidences", [])
         return {
             "response": final_state.get("response", "No response"),
-            "steps_executed": len(final_state.get("past_steps", [])),
-            "confidence_score": final_state.get("confidence_score", 0.0),
-            "past_steps": final_state.get("past_steps", []),
+            "steps_executed": len(past_steps),
+            "confidence_score": (
+                overall_confidence(past_steps, step_confidences)
+                if step_confidences
+                else final_state.get("confidence_score", 0.0)
+            ),
+            "past_steps": past_steps,
+            "step_confidences": step_confidences,
+            "step_evidence": final_state.get("step_evidence", []),
         }
     except Exception as exc:  # noqa: BLE001
         if _is_llm_unavailable_error(exc):

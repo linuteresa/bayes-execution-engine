@@ -29,7 +29,7 @@ import hashlib
 import os
 import sys
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from eval.datasets import EvalItem
 
@@ -239,13 +239,79 @@ class SimulatedAnswerer:
         return self._logprob
 
 
+# ------------------------------------------------------------------------- replay
+@dataclass
+class ReplayAnswerer:
+    """Feeds back the samples a previous run stored (``--keep-samples``).
+
+    Lets two agreement measures be scored on *identical* samples. Two fresh runs differ
+    in sampling noise as well as in the measure, which would muddy the comparison.
+    Provenance comes from the source rows, so a replayed simulated run stays simulated.
+    """
+
+    stored: Dict[str, dict]
+    items: List[EvalItem]
+    name: str = "replay"
+    is_simulated: bool = False
+    model_name: str = "unknown"
+
+    @classmethod
+    def from_rows(cls, path) -> "ReplayAnswerer":
+        from eval.harness import read_rows
+
+        rows = read_rows(path)
+        if not rows or any(not r.samples for r in rows):
+            raise ValueError(f"{path}: rows have no stored samples; re-run with --keep-samples")
+        flags = {r.is_simulated for r in rows}
+        models = {r.model for r in rows}
+        answerers = {r.answerer for r in rows}
+        return cls(
+            stored={r.item_id: {"samples": r.samples, "logprob": r.mean_logprob} for r in rows},
+            items=[
+                EvalItem(r.item_id, r.question, list(r.gold), r.grader, r.difficulty, r.source)
+                for r in rows
+            ],
+            name=f"replay of {answerers.pop() if len(answerers) == 1 else 'mixed'}",
+            # Unknown or mixed provenance is treated as simulated, never as real.
+            is_simulated=flags != {False},
+            model_name=models.pop() if len(models) == 1 else "unknown",
+        )
+
+    def sampler_for(self, item: EvalItem, n_samples: int = 4) -> "_ReplaySampler":
+        entry = self.stored[item.id]
+        if n_samples != len(entry["samples"]):
+            raise ValueError(
+                f"{item.id}: run stored {len(entry['samples'])} samples, replay asked for "
+                f"{n_samples}; pass --samples {len(entry['samples'])}"
+            )
+        return _ReplaySampler(entry["samples"], entry["logprob"])
+
+
+class _ReplaySampler:
+    def __init__(self, samples: List[str], logprob: Optional[float]):
+        self._samples = samples
+        self._logprob = logprob
+        self._calls = 0
+
+    def invoke(self, _prompt: str) -> _Msg:
+        out = self._samples[self._calls % len(self._samples)]
+        self._calls += 1
+        return _Msg(out)
+
+    def mean_logprob(self) -> Optional[float]:
+        return self._logprob
+
+
 def build_answerer(kind: str, *, temperature: float = 0.7, seed: int = 0):
-    """Factory: ``llama`` for the real path, ``sim`` for the offline stand-in."""
+    """Factory: ``llama`` for the real path, ``sim`` for the offline stand-in,
+    ``replay:<rows.jsonl>`` to re-score a run's stored samples."""
+    if kind.startswith("replay:"):
+        return ReplayAnswerer.from_rows(kind.removeprefix("replay:"))
     if kind in ("llama", "llama.cpp", "live", "real"):
         return LlamaAnswerer(temperature=temperature)
     if kind in ("sim", "simulated", "mock"):
         return SimulatedAnswerer(seed=seed)
-    raise ValueError(f"unknown answerer {kind!r}; use 'llama' or 'sim'")
+    raise ValueError(f"unknown answerer {kind!r}; use 'llama', 'sim' or 'replay:<rows.jsonl>'")
 
 
 def is_simulated(answerer) -> bool:
@@ -255,6 +321,7 @@ def is_simulated(answerer) -> bool:
 __all__ = [
     "LlamaAnswerer",
     "SimulatedAnswerer",
+    "ReplayAnswerer",
     "build_answerer",
     "is_simulated",
 ]

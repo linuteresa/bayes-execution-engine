@@ -24,6 +24,15 @@ services:
     ports:
       - "8000:8000"
 
+  # Optional: meaning-based agreement. Uncomment, then set on the engine service:
+  #   EMBEDDINGS_BASE_URL: http://embeddings:8081/v1
+  # embeddings:
+  #   image: ghcr.io/ggml-org/llama.cpp:server
+  #   command: >
+  #     -hf second-state/All-MiniLM-L6-v2-Embedding-GGUF:Q8_0
+  #     --embeddings --host 0.0.0.0 --port 8081
+  #   ports: ["8081:8081"]
+
   # Optional: enable durable job store + checkpoints by setting JOB_STORE=redis
   # redis:
   #   image: redis:7-alpine

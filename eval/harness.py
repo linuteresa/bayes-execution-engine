@@ -22,14 +22,14 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
 from bayesian_engine.bayes_engine import (
-    STATE_MAP,
     DirichletBayesianEngine,
     good_probability,
+    outcome_label,  # lives in the engine so the service can use it; re-exported here
 )
 from eval.answerers import is_simulated
 from eval.datasets import EvalItem
 from eval.grading import grade
-from nodes.llm_executor import execute_step_with_llm
+from nodes.llm_executor import execute_step_with_llm, similarity_backend
 
 SIGNAL_KEYS = (
     "agreement_mean",
@@ -235,21 +235,8 @@ def run_metadata(answerer, items, *, n_samples: int, dataset_spec: str) -> dict:
         "dataset_spec": dataset_spec,
         "n_items": len(items),
         "n_samples_per_item": n_samples,
+        "similarity": similarity_backend(),
     }
-
-
-def outcome_label(correct: int) -> int:
-    """Map a binary correctness label onto the engine's 5-state ordinal outcome axis.
-
-    A gold-answer eval yields one bit per item, but ``observe`` expects an outcome in
-    ``0..4``. We collapse onto the endpoints: correct -> ``CERTAIN``, wrong ->
-    ``AMBIGUOUS``. Since the reported confidence is ``P(CERTAIN) + P(HIGH)`` and HIGH
-    then accrues no counts, the posterior confidence in a well-observed context
-    converges to that context's empirical accuracy -- which is exactly the quantity a
-    calibrated confidence is supposed to equal. Intermediate outcome states stay
-    reachable from the prior, so low-count contexts are still smoothly regularized.
-    """
-    return STATE_MAP["CERTAIN"] if correct else STATE_MAP["AMBIGUOUS"]
 
 
 __all__ = [

@@ -65,7 +65,9 @@ def _first_balanced_object(s: str) -> Optional[dict[str, Any]]:
                     if depth == 0:
                         candidate = s[start : i + 1]
                         try:
-                            parsed = json.loads(candidate)
+                            # strict=False: small models put raw newlines inside
+                            # string values (multi-line final answers).
+                            parsed = json.loads(candidate, strict=False)
                             if isinstance(parsed, dict):
                                 return parsed
                         except json.JSONDecodeError:

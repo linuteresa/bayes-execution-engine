@@ -97,16 +97,21 @@ def executor_node(state: PlanExecuteState, config=None) -> dict:
     if sampler is None:
         sampler, mode = _MockToolSampler(current_task), "mock"
 
-    result_text, confidence = _execute_step(sampler, current_task, state.get("input", ""), mode)
+    result_text, confidence, evidence = _execute_step(
+        sampler, current_task, state.get("input", ""), mode
+    )
 
     return {
         "plan": state["plan"][1:],
         "past_steps": [(current_task, result_text)],
+        "step_confidences": [confidence],
+        # Kept so feedback on the run can later be fed back into the engine.
+        "step_evidence": [evidence],
         "confidence_score": confidence,
     }
 
 
-def _execute_step(sampler, task: str, goal: str, mode: str) -> tuple[str, float]:
+def _execute_step(sampler, task: str, goal: str, mode: str) -> tuple[str, float, dict]:
     exec_result = execute_step_with_llm(sampler, task, goal)
     evidence = (
         _keyword_evidence(task, exec_result.answer)
@@ -137,7 +142,7 @@ def _execute_step(sampler, task: str, goal: str, mode: str) -> tuple[str, float]
             backend=mode,
             evidence_mode=_evidence_mode(),
         )
-    return answer, confidence
+    return answer, confidence, evidence
 
 
 def _evidence_mode() -> str:

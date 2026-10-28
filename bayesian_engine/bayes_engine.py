@@ -39,6 +39,7 @@ informative prior plus whatever evidence has been observed.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Optional, Tuple
 
@@ -183,6 +184,21 @@ class DirichletBayesianEngine:
     def total_observations(self) -> float:
         """Total real observations across all contexts."""
         return float(self.observation_counts().sum())
+
+    # ------------------------------------------------------------- persistence
+    def save(self, path: str) -> None:
+        """Write the observed counts (not alpha) so a changed prior still applies on load."""
+        tmp = f"{path}.tmp"
+        with open(tmp, "wb") as fh:
+            np.save(fh, self.observation_counts())
+        os.replace(tmp, path)  # atomic: a crash mid-write never leaves a torn file
+
+    def load(self, path: str) -> None:
+        """Restore counts written by :meth:`save` on top of this engine's prior."""
+        counts = np.load(path)
+        if counts.shape != self._prior.shape:
+            raise ValueError(f"saved counts have shape {counts.shape}, expected {self._prior.shape}")
+        self.alpha = self._prior + counts
 
     # --------------------------------------------------------- predictive CPT
     def cpt(self) -> np.ndarray:
@@ -335,11 +351,33 @@ _DEFAULT_ENGINE: Optional[DirichletBayesianEngine] = None
 
 
 def get_default_engine() -> DirichletBayesianEngine:
-    """Lazily build a shared engine with the informative prior (no randomness)."""
+    """Lazily build a shared engine with the informative prior (no randomness).
+
+    If ``ENGINE_STATE_PATH`` points at counts saved from feedback, they are loaded on
+    top of the prior, so what the engine learned survives a restart.
+    """
     global _DEFAULT_ENGINE
     if _DEFAULT_ENGINE is None:
-        _DEFAULT_ENGINE = DirichletBayesianEngine()
+        engine = DirichletBayesianEngine()
+        path = os.getenv("ENGINE_STATE_PATH")
+        if path and os.path.exists(path):
+            engine.load(path)
+        _DEFAULT_ENGINE = engine
     return _DEFAULT_ENGINE
+
+
+def outcome_label(correct: int) -> int:
+    """Map a binary correctness label onto the engine's 5-state ordinal outcome axis.
+
+    A gold-answer eval yields one bit per item, but ``observe`` expects an outcome in
+    ``0..4``. We collapse onto the endpoints: correct -> ``CERTAIN``, wrong ->
+    ``AMBIGUOUS``. Since the reported confidence is ``P(CERTAIN) + P(HIGH)`` and HIGH
+    then accrues no counts, the posterior confidence in a well-observed context
+    converges to that context's empirical accuracy -- which is exactly the quantity a
+    calibrated confidence is supposed to equal. Intermediate outcome states stay
+    reachable from the prior, so low-count contexts are still smoothly regularized.
+    """
+    return STATE_MAP["CERTAIN"] if correct else STATE_MAP["AMBIGUOUS"]
 
 
 def build_bayesian_network():
@@ -386,6 +424,7 @@ __all__ = [
     "GOOD_STATES",
     "build_bayesian_network",
     "get_default_engine",
+    "outcome_label",
     "context_index",
     "context_triple",
     "STATE_NAMES",

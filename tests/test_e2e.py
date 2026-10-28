@@ -120,6 +120,72 @@ def test_replanner_falls_back_to_remaining_plan_when_model_repeats_completed(mon
     assert replanner_node(state, {"configurable": {"model": object()}}) == {"plan": ["step 2"]}
 
 
+def test_executor_records_each_steps_confidence():
+    """confidence_score is overwritten per step; step_confidences keeps one entry per step."""
+    result = executor_node(_state(["query conflicting data sources"]))
+    assert result["step_confidences"] == [result["confidence_score"]]
+
+
+def test_replanner_sees_each_steps_confidence(monkeypatch):
+    """The replanner can only act on low confidence if the prompt actually carries it."""
+    seen = {}
+
+    class FakeReplanner:
+        def invoke(self, payload):
+            seen.update(payload)
+            return '{"action": "response", "response": "done"}'
+
+    monkeypatch.setattr("nodes.replanner.create_replanner", lambda _model: FakeReplanner())
+    state = {
+        "input": "test",
+        "plan": [],
+        "past_steps": [("step 1", "result one"), ("step 2", "result two")],
+        "step_confidences": [0.27, 0.72],
+        "response": "",
+        "confidence_score": 0.72,
+    }
+
+    replanner_node(state, {"configurable": {"model": object()}})
+
+    assert "- step 1: result one (confidence: 0.27)" in seen["past_steps"]
+    assert "- step 2: result two (confidence: 0.72)" in seen["past_steps"]
+
+
+def test_run_accumulates_one_confidence_per_step(monkeypatch):
+    """Through the real graph, every executed step contributes its own confidence."""
+    pytest.importorskip("langgraph")
+    from langchain_core.messages import AIMessage
+    from langchain_core.runnables import RunnableLambda
+
+    from core.graph import run_execution_engine
+
+    flaky_answers = iter(f"there are {n} active users today" for n in range(100))
+
+    def _fake_llm(prompt):
+        text = prompt if isinstance(prompt, str) else prompt.to_string()
+        if "orchestrator architecture planner" in text:
+            return AIMessage(content='{"steps": ["stable step", "flaky step"]}')
+        if "Step to execute: stable step" in text:
+            return AIMessage(content="the system has five active users")
+        if "Step to execute: flaky step" in text:
+            return AIMessage(content=next(flaky_answers))
+        if "Step to execute: Re-check: flaky step" in text:
+            return AIMessage(content="the system has five active users")
+        return AIMessage(content='{"action": "plan", "steps": []}')
+
+    monkeypatch.setattr("core.graph.build_llm", lambda **_kw: RunnableLambda(_fake_llm))
+
+    result = run_execution_engine("who is active?")
+
+    assert [task for task, _ in result["past_steps"]] == [
+        "stable step", "flaky step", "Re-check: flaky step",
+    ]
+    stable, flaky, recheck = result["step_confidences"]
+    assert flaky < stable
+    # The re-check replaces the flaky attempt in the run-level (weakest-step) score.
+    assert result["confidence_score"] == min(stable, recheck)
+
+
 def test_graph_routing():
     """should_continue routes correctly. Requires langgraph (skip otherwise)."""
     pytest.importorskip("langgraph")

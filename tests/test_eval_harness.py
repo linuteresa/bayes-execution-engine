@@ -139,3 +139,63 @@ def test_unrelated_errors_still_propagate(monkeypatch):
     )
     with pytest.raises(ConnectionError):
         answerers.LlamaAnswerer().invoke("hi")
+
+
+def test_metadata_records_which_agreement_measure_was_used(monkeypatch):
+    """Word-overlap and embedding runs are not comparable; the artefacts must say which."""
+    answerer = SimulatedAnswerer(seed=0)
+    monkeypatch.delenv("EMBEDDINGS_BASE_URL", raising=False)
+    assert run_metadata(answerer, _items(1), n_samples=4, dataset_spec="b")["similarity"] == "word-overlap"
+
+    monkeypatch.setenv("EMBEDDINGS_BASE_URL", "http://localhost:8081/v1")
+    monkeypatch.setenv("EMBEDDINGS_MODEL", "all-minilm-l6-v2")
+    meta = run_metadata(answerer, _items(1), n_samples=4, dataset_spec="b")
+    assert meta["similarity"] == "embeddings:all-minilm-l6-v2"
+
+
+def test_replay_rescores_the_exact_same_samples(tmp_path):
+    """Comparing agreement measures is only fair on identical samples, not two noisy runs."""
+    from eval.answerers import ReplayAnswerer
+
+    original = run_harness(_items(6), SimulatedAnswerer(seed=0), keep_samples=True)
+    path = tmp_path / "rows.jsonl"
+    write_rows(original, path)
+
+    replay = ReplayAnswerer.from_rows(path)
+    replayed = run_harness(replay.items, replay, keep_samples=True)
+
+    assert [r.samples for r in replayed] == [r.samples for r in original]
+    assert [r.confidence for r in replayed] == [r.confidence for r in original]
+    assert [r.correct for r in replayed] == [r.correct for r in original]
+
+
+def test_replay_keeps_the_source_runs_provenance(tmp_path):
+    """Replaying a simulated run must not launder it into a 'real' result."""
+    from eval.answerers import ReplayAnswerer
+
+    path = tmp_path / "rows.jsonl"
+    write_rows(run_harness(_items(2), SimulatedAnswerer(seed=0), keep_samples=True), path)
+
+    replay = ReplayAnswerer.from_rows(path)
+    assert is_simulated(replay)
+    assert replay.model_name == "simulated-answerer"
+
+
+def test_replay_needs_stored_samples(tmp_path):
+    from eval.answerers import ReplayAnswerer
+
+    path = tmp_path / "rows.jsonl"
+    write_rows(run_harness(_items(2), SimulatedAnswerer(seed=0)), path)  # no keep_samples
+    with pytest.raises(ValueError, match="--keep-samples"):
+        ReplayAnswerer.from_rows(path)
+
+
+def test_replay_refuses_a_different_sample_count(tmp_path):
+    """Re-scoring 4 of 8 stored samples would silently score a different experiment."""
+    from eval.answerers import ReplayAnswerer
+
+    path = tmp_path / "rows.jsonl"
+    write_rows(run_harness(_items(1), SimulatedAnswerer(seed=0), n_samples=4, keep_samples=True), path)
+    replay = ReplayAnswerer.from_rows(path)
+    with pytest.raises(ValueError, match="4 samples"):
+        run_harness(replay.items, replay, n_samples=8)
