@@ -36,7 +36,7 @@ _UNCERTAIN = re.compile(r"\b(?:or|either|maybe|perhaps|not sure|don't know|do no
 _NEGATED = re.compile(
     r"\b(?:not|isn't|isn’t|wasn't|wasn’t|wrong|incorrect|rather than|instead of)\b", re.I
 )
-GRADING_VERSION = 2
+GRADING_VERSION = 3
 
 
 def final_answer_span(prediction: str) -> str:
@@ -130,14 +130,45 @@ def _last_number(text: str) -> Optional[float]:
     return values[-1] if values else None
 
 
+def _numeric_answer_span(prediction: str) -> str:
+    candidate = final_answer_span(prediction)
+    if candidate == str(prediction or "").strip():
+        # Do not let negation or alternatives in earlier reasoning reject an
+        # affirmative conclusion. Decimal points are not sentence boundaries.
+        candidate = re.split(r"(?<=[.!?])\s+(?=[A-Z])", candidate)[-1]
+    # A purchase count can be followed by the budget used to buy it. That budget
+    # is supporting context, rather than a replacement for the stated count.
+    budget = re.search(r"\b(?:with|using) the remaining\s+(?=[$£€]?\s*\d)", candidate, re.I)
+    if budget:
+        purchase = candidate[:budget.start()]
+        if re.search(r"\b(?:can|could) buy\s+", purchase, re.I) and _NUMBER.search(purchase):
+            candidate = purchase
+    return candidate
+
+
+def _number_is_negated(candidate: str) -> bool:
+    text = _LATEX_FRACTION.sub(r"\1/\2", candidate.replace("−", "-"))
+    tokens = list(_NUMBER.finditer(text))
+    if not tokens:
+        return False
+    last = tokens[-1]
+    for negative in _NEGATED.finditer(text):
+        if negative.start() >= last.end():
+            return True
+        between = text[negative.end():last.start()].strip()
+        if re.fullmatch(r"(?:(?:equal to|the answer|the result|the value)\s*)?(?:is|:|=)?\s*[$£€]?", between):
+            return True
+    return False
+
+
 def numeric_match(prediction: str, golds: Sequence[str], *, rel_tol: float = 1e-6) -> bool:
     """Compare the prediction's *final* number against the gold number.
 
     Final rather than first: chain-of-thought style answers restate intermediate
     quantities before the result, so the last number is the conventional choice.
     """
-    candidate = final_answer_span(prediction)
-    if _UNCERTAIN.search(candidate) or _NEGATED.search(candidate):
+    candidate = _numeric_answer_span(prediction)
+    if _UNCERTAIN.search(candidate) or _number_is_negated(candidate):
         return False
     pred = _last_number(candidate)
     if pred is None:

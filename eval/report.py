@@ -420,10 +420,10 @@ def render_report(results: dict) -> str:
         lines += [
             "### Per-dataset breakdown",
             "",
-            "One averaged number hides the most useful thing in this run: self-consistency "
-            "has a known failure mode — a model that is *consistently* wrong looks confident "
-            "— and arithmetic is where that bites, because a wrong method reproduces the same "
-            "wrong answer every sample.",
+            "Datasets can have different score and accuracy distributions, so the pooled "
+            "ranking can differ substantially from ranking within each dataset. "
+            "Agreement measures consistency rather than correctness; differing intermediate "
+            "numeric claims can also lower agreement even when final answers match.",
             "",
             "| Dataset | Items | Accuracy | ECE ↓ | AUROC ↑ | AUROC (agreement) | Acc @100% | Acc @50% |",
             "|---|---|---|---|---|---|---|---|",

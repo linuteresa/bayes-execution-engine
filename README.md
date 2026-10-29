@@ -94,9 +94,27 @@ Run-level feedback still assigns the same verdict to every recorded step: credit
 is coarse. API feedback no longer saves per-process `.npy` snapshots. Legacy `.npy` counts
 and old Redis `job:*` records are not migrated automatically.
 
-## Calibration: historical evidence and current scope
+## Calibration evidence and current scope
 
-The committed real-model rows predate evidence version 2, versioned acquisition manifests
+The [fresh 500-question run](eval/results/2026-10-28-qwen3b-v2/REPORT.md) uses cached
+Qwen2.5-3B Q4_K_M weights, evidence version 2, word-overlap agreement and grading version 3.
+It makes four fresh model calls per question on the existing 250 TriviaQA + 250 GSM8K
+question set. A label spot-check found numeric-grading errors; all eight changed labels
+are [recorded](eval/results/2026-10-28-qwen3b-v2/LABEL_AUDIT.json), with the original
+acquisition preserved separately.
+
+| Fresh single-step signal | Accuracy | ECE ↓ | Brier ↓ | AUROC ↑ |
+|---|---:|---:|---:|---:|
+| Bayesian engine | 0.478 | 0.177 | 0.271 | 0.556 |
+| Raw word-overlap agreement | 0.478 | 0.418 | 0.416 | 0.477 |
+| Mean token logprob baseline | 0.478 | 0.355 | 0.342 | 0.770 |
+
+The engine's pooled ranking is weak and worse than token logprob. Its AUROC is 0.799
+within TriviaQA and 0.568 within GSM8K; score distributions differ substantially across
+the datasets. These results identify a confidence-quality gap rather than validate a
+calibrated final-response probability. See [validation scope](docs/VALIDATION.md).
+
+The historical real-model rows predate evidence version 2, versioned acquisition manifests
 and the revised grader. Their reports were regenerated **from saved rows only**: original
 answers, evidence, confidence and correctness labels are unchanged; tied-score selective
 prediction is now invariant to input order. Missing acquisition settings remain unknown.
@@ -136,8 +154,8 @@ python -m eval.run_eval --model sim --out /tmp/bayes-sim
 ```
 
 `--model replay:PATH` re-scores stored samples under the current evidence implementation;
-`--rows PATH` preserves stored scores and labels. These are different experiments. A fresh
-live-model evaluation and an audited end-to-end benchmark remain necessary. See
+`--rows PATH` preserves stored scores and labels. These are different experiments.
+Independent live-model replications and an audited end-to-end benchmark remain necessary. See
 [calibration methodology](docs/CALIBRATION.md).
 
 ## Deployment and optional integrations

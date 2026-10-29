@@ -10,7 +10,7 @@ and grades it against gold. This isolates a single-step confidence signal. It do
 measure planner quality, dependent multi-step reasoning, replanner synthesis or the final
 weakest-step score as a probability of correctness.
 
-The committed real-model rows predate evidence version 2 and grading version 2. Their
+The historical real-model rows predate evidence version 2 and grading version 2. Their
 reports have been regenerated from stored scores and labels with corrected tie handling;
 no model or embedding requests were made and raw historical rows are unchanged. They do
 not establish calibration of the current executor. Missing acquisition details remain
@@ -57,7 +57,8 @@ made-up bundled dataset or the current model server configuration.
 Graders prefer the final explicitly labelled/boxed answer over alternatives mentioned in
 reasoning. Alias matching respects token boundaries and rejects explicit negation or
 ambiguity; numeric grading handles signs, decimals, grouped numbers, scientific notation
-and fractions. These are deterministic heuristics, not semantic judges. They can reject
+and fractions. Grading version 3 scopes negation to the final numeric claim and recognizes
+purchase counts followed by supporting budgets. These are deterministic heuristics, not semantic judges. They can reject
 valid paraphrases and still miss subtle incorrect answers. Audit a representative sample
 of labels before making stronger claims. Historical labels have not been retroactively
 changed to the revised rules.
@@ -128,10 +129,37 @@ Reports: [embeddings](../eval/results/embeddings/REPORT.md),
 code and includes a versioned manifest, but the sampler is told the gold answer. It proves
 pipeline execution only and is banner-stamped as not a calibration result.
 
+## Fresh run and label audit
+
+The [2026-10-28/29 run](../eval/results/2026-10-28-qwen3b-v2/REPORT.md) collected 2,000
+fresh model responses using the existing cached Qwen2.5-3B Q4_K_M GGUF and the 500
+questions already represented in the historical word-overlap rows. Acquisition records
+the independently verified weights hash, server version and a versioned manifest.
+The initial grading-v2 acquisition is preserved; grading-v3 replay changes eight labels
+while preserving every answer, sample, confidence score and evidence vector.
+
+An unblinded 20-label agent spot-check, stratified by source and original correctness,
+found two false negatives. All eight labels changed by the general grader correction
+were then reviewed against the supplied gold answers. This is 26 distinct reviewed rows,
+not a full label audit. Final-answer agreement does not establish correct intermediate
+reasoning. Selection, labels, corrections and checksums are recorded in
+[LABEL_AUDIT.json](../eval/results/2026-10-28-qwen3b-v2/LABEL_AUDIT.json).
+
+The engine has pooled accuracy 0.478, ECE 0.177, Brier 0.271 and AUROC 0.556
+[0.506, 0.606]. Token logprob ranks answers substantially better: AUROC 0.770
+[0.728, 0.810], while its ECE/Brier are worse. Engine AUROC within TriviaQA is 0.799;
+within GSM8K it is 0.568. It is underconfident on arithmetic (mean score 0.301 versus
+accuracy 0.588) and overconfident on trivia (0.550 versus 0.368). Pooling those score
+distributions obscures the within-dataset ranking. Numeric guards also compare
+intermediate claims, so different reasoning can depress agreement despite matching
+final answers. These observations motivate a separate, held-out test of answer-focused
+numeric extraction and independent verification; this benchmark should not become its
+own tuning/test set.
+
 ## Next evidence needed
 
-Run fresh live-model collections with recorded weights/server configuration, audit grading
-labels, evaluate multiple sampling runs, and add independent correctness signals. Separately
+Repeat live-model collections across sampling runs and new held-out questions, expand
+the label audit, and add independent correctness signals. Separately
 run a held-out end-to-end evaluation of final responses and stopping/rechecking decisions.
 Self-consistency can be maximally high for a consistently wrong method, so reliable
 arithmetic or factual verification requires evidence beyond repetition.

@@ -1,0 +1,209 @@
+{
+  "scope": "Unblinded repository-agent spot-check against supplied gold answers; final-answer correctness only. Not independent factual adjudication or a complete label audit.",
+  "selection": "Five examples per source and original correctness label, random.Random(17) reset per stratum, selected from the first 405 acquired rows before collection finished.",
+  "original_grading_version": 2,
+  "corrected_grading_version": 3,
+  "original_rows_sha256": "89d5428f959ca1aa7ddb6d172635adf68227232b9056eef876071b1ee681d40f",
+  "corrected_rows_sha256": "ed128089b52ecf92c65ad4d6991a91f6502aef4027801e024b43f7d141ff6733",
+  "initial_spot_check": [
+    {
+      "item_id": "qz_63",
+      "source": "triviaqa",
+      "original_label": 0,
+      "reviewed_final_answer_label": 0,
+      "corrected_label": 0
+    },
+    {
+      "item_id": "qz_5790",
+      "source": "triviaqa",
+      "original_label": 0,
+      "reviewed_final_answer_label": 0,
+      "corrected_label": 0
+    },
+    {
+      "item_id": "tc_1700",
+      "source": "triviaqa",
+      "original_label": 0,
+      "reviewed_final_answer_label": 0,
+      "corrected_label": 0
+    },
+    {
+      "item_id": "qz_4147",
+      "source": "triviaqa",
+      "original_label": 0,
+      "reviewed_final_answer_label": 0,
+      "corrected_label": 0
+    },
+    {
+      "item_id": "qz_1173",
+      "source": "triviaqa",
+      "original_label": 0,
+      "reviewed_final_answer_label": 0,
+      "corrected_label": 0
+    },
+    {
+      "item_id": "qb_2105",
+      "source": "triviaqa",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "qz_2227",
+      "source": "triviaqa",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "tc_2901",
+      "source": "triviaqa",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "qb_2329",
+      "source": "triviaqa",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "qz_340",
+      "source": "triviaqa",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "gsm8k-0467",
+      "source": "gsm8k",
+      "original_label": 0,
+      "reviewed_final_answer_label": 0,
+      "corrected_label": 0
+    },
+    {
+      "item_id": "gsm8k-0431",
+      "source": "gsm8k",
+      "original_label": 0,
+      "reviewed_final_answer_label": 0,
+      "corrected_label": 0
+    },
+    {
+      "item_id": "gsm8k-0619",
+      "source": "gsm8k",
+      "original_label": 0,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "gsm8k-0938",
+      "source": "gsm8k",
+      "original_label": 0,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "gsm8k-0493",
+      "source": "gsm8k",
+      "original_label": 0,
+      "reviewed_final_answer_label": 0,
+      "corrected_label": 0
+    },
+    {
+      "item_id": "gsm8k-0614",
+      "source": "gsm8k",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "gsm8k-0141",
+      "source": "gsm8k",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "gsm8k-0974",
+      "source": "gsm8k",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "gsm8k-0585",
+      "source": "gsm8k",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    },
+    {
+      "item_id": "gsm8k-0544",
+      "source": "gsm8k",
+      "original_label": 1,
+      "reviewed_final_answer_label": 1,
+      "corrected_label": 1
+    }
+  ],
+  "changed_labels": [
+    {
+      "item_id": "gsm8k-0113",
+      "original_label": 0,
+      "corrected_label": 1,
+      "reviewed_final_answer_label": 1,
+      "note": "The affirmative final answer is 25; negation describes flowers that did not grow."
+    },
+    {
+      "item_id": "gsm8k-0186",
+      "original_label": 0,
+      "corrected_label": 1,
+      "reviewed_final_answer_label": 1,
+      "note": "The final answer 5 matches gold; reasoning uses an unsupported assumption. This label does not validate reasoning."
+    },
+    {
+      "item_id": "gsm8k-0721",
+      "original_label": 0,
+      "corrected_label": 1,
+      "reviewed_final_answer_label": 1,
+      "note": "The final count is 2450; earlier negation describes arms not raised."
+    },
+    {
+      "item_id": "gsm8k-0619",
+      "original_label": 0,
+      "corrected_label": 1,
+      "reviewed_final_answer_label": 1,
+      "note": "The final count is 76; negation describes the non-functioning streetlights."
+    },
+    {
+      "item_id": "gsm8k-0938",
+      "original_label": 0,
+      "corrected_label": 1,
+      "reviewed_final_answer_label": 1,
+      "note": "The answer is four pens; the trailing 100 is a supporting budget."
+    },
+    {
+      "item_id": "gsm8k-0323",
+      "original_label": 0,
+      "corrected_label": 1,
+      "reviewed_final_answer_label": 1,
+      "note": "The final answer is 75; earlier negation concerns a different physical effect."
+    },
+    {
+      "item_id": "gsm8k-0408",
+      "original_label": 0,
+      "corrected_label": 1,
+      "reviewed_final_answer_label": 1,
+      "note": "The final answer 20 matches gold; intermediate reasoning is inconsistent and is not validated by the label."
+    },
+    {
+      "item_id": "gsm8k-0056",
+      "original_label": 0,
+      "corrected_label": 1,
+      "reviewed_final_answer_label": 1,
+      "note": "Despite initial refusal wording, the model concludes three visits, matching gold."
+    }
+  ],
+  "original_samples_answers_evidence_and_scores_unchanged": true
+}

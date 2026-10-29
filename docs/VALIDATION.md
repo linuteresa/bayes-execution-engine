@@ -5,7 +5,9 @@ exercised real infrastructure locally, beyond the deterministic offline suite.
 
 ## Infrastructure and recovery
 
-The full suite passed **340 tests with no skips** before the subsequent grader corrections.
+Final verification passed **342 tests with no skips**, plus Ruff, `git diff --check`
+and the virtual environment's `pip check`. An earlier final rerun found Docker Desktop
+stopped (five connection failures); after restoring the services the full suite passed.
 The optional Redis/Postgres round trips and three process-crash recovery cases passed.
 Each crash case uses real HTTP requests and the real OpenAI-compatible client against
 a scripted model endpoint. The API is killed after an execution step commits, then a
@@ -139,5 +141,28 @@ export LLAMA_SERVER_VERSION=llama.cpp-0.7.0-build11669-620d2225c
 export LLM_MAX_TOKENS=512 LLM_TIMEOUT_SECONDS=120
 .venv/bin/python -m eval.run_eval --model llama \
   --dataset jsonl:eval/data/calibration-500.jsonl --samples 4 --temperature 0.7 \
-  --seed 0 --keep-samples --out eval/results/2026-10-28-qwen3b-v2
+  --seed 0 --keep-samples --out eval/results/reproduced-qwen3b-v3
 ```
+
+The completed original acquisition is in
+[`2026-10-28-qwen3b-v2-acquisition`](../eval/results/2026-10-28-qwen3b-v2-acquisition/README.md).
+Its rows retain the original grading-v2 labels. A 20-label spot-check found two false
+negatives; grading version 3 corrects eight labels across the full run. Every changed
+label was reviewed. Corrected outputs are in
+[`2026-10-28-qwen3b-v2`](../eval/results/2026-10-28-qwen3b-v2/README.md).
+The directory name refers to evidence version 2; its corrected grading version is 3.
+Answers, raw samples, evidence and confidence scores match the acquisition exactly.
+
+Reproduce corrected scoring without inference:
+
+```bash
+.venv/bin/python -m eval.run_eval \
+  --model replay:eval/results/2026-10-28-qwen3b-v2-acquisition/rows.jsonl \
+  --samples 4 --keep-samples --out /tmp/bayes-corrected-scoring
+```
+
+The resulting engine accuracy is 0.478, ECE 0.177 and AUROC 0.556. Token logprob ranks
+answers better (AUROC 0.770); engine ECE/Brier are better than the raw logprob score's.
+This operational milestone is complete, but confidence quality and end-to-end validation
+remain research work. See [calibration methodology](CALIBRATION.md) for scope and the
+limitations of the spot-check.

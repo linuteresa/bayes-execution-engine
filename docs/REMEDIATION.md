@@ -32,11 +32,17 @@ Defaults are a 16,000-character prompt, 128 active/pending jobs, 8 workers, 30-s
 Initial local verification: **333 tests passed; 3 optional live-backend tests skipped**. The global Ruff check and `git diff --check` pass. Tests use deterministic model doubles and real local SQLite/MemorySaver state. Live backend tests require `TEST_REDIS_URL` / `TEST_POSTGRES_DSN` and their packages; RedisSaver requires a Redis server with its required search/JSON capabilities. Default/Redis Compose configurations validate, an offline wheel build and extracted API/CLI/data smoke checks pass, and `pip check` passes.
 
 Follow-up validation enabled the optional backends and added real process crashes:
-**340 tests passed with no skips** before the subsequent grader corrections. The image
+**342 tests passed with no skips** after the grader corrections. The image
 built with all optional integrations, Redis/Postgres recovery passed, a collector
 received the exported span, and a real-model Docker API job recovered after SIGKILL.
 See [live validation](VALIDATION.md) for evidence, exact scope and reproduction commands.
 
-Historical real-model row files were preserved. Reports/metrics/figures were regenerated from them with corrected tie handling and provenance labels. Old rows without acquisition manifests remain explicitly historical/unverified; updated evidence/grading code requires fresh model acquisition before making current-model calibration claims. Manual review of a representative set of correctness labels and a held-out end-to-end final-answer evaluation remain necessary.
+Historical real-model row files were preserved. Reports/metrics/figures were regenerated from them with corrected tie handling and provenance labels. Old rows without acquisition manifests remain explicitly historical/unverified.
 
-There is no automatic migration of legacy service `ENGINE_STATE_PATH` count files or old Redis `job:{id}` records into the new transactional store. Preserve those artifacts before upgrading and migrate them deliberately if their learned data or outstanding jobs matter. The standalone Bayesian `.npy` save/load APIs remain available. No commits, remote publication, deployment or messages to other people were performed.
+A subsequent [fresh 500-question run](../eval/results/2026-10-28-qwen3b-v2/REPORT.md)
+records current evidence and verified weights identity. Its label audit found two grader
+defects; grading-v3 replay corrects eight labels without changing model responses or
+scores. The audit covers 26 distinct rows, not all 500. Further label auditing, independent
+replications and a held-out end-to-end final-answer evaluation remain necessary.
+
+There is no automatic migration of legacy service `ENGINE_STATE_PATH` count files or old Redis `job:{id}` records into the new transactional store. Preserve those artifacts before upgrading and migrate them deliberately if their learned data or outstanding jobs matter. The standalone Bayesian `.npy` save/load APIs remain available. The initial remediation pass left changes uncommitted; follow-up work committed the hardening and local validation. That validation work did not push commits or deploy the service remotely.

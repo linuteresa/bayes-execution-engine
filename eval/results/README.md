@@ -6,6 +6,13 @@ existing run unless `--overwrite` is explicit. Each completed row is flushed and
 so `--resume` can continue a failed collection with the same dataset/configuration; it
 validates the experiment fingerprint, saved identities and checksummed durable prefix.
 
+- **`2026-10-28-qwen3b-v2/`** — fresh 500-question word-overlap collection on the cached
+  Qwen2.5-3B model, with recorded weights hash and server version. Evidence version 2,
+  corrected grading version 3. A replay of the preserved acquisition corrects eight
+  labels without changing model responses or confidence scores. See its label audit.
+- **`2026-10-28-qwen3b-v2-acquisition/`** — original fresh rows with grading-v2 labels,
+  retained to make the label correction traceable. Use the corrected report above for
+  current conclusions. These are fresh samples on the existing historical question set.
 - **`embeddings/`** and **`word-overlap/`** — historical evidence: 500 TriviaQA + GSM8K items
   sampled once (`--keep-samples`) under word overlap, then the *same samples* re-scored with
   embedding agreement via `--model replay:word-overlap/rows.jsonl`. Their reports were
