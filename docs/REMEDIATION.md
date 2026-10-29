@@ -29,7 +29,13 @@ Defaults are a 16,000-character prompt, 128 active/pending jobs, 8 workers, 30-s
 
 ## Validation and remaining work
 
-Final local verification: **333 tests passed; 3 optional live-backend tests skipped**. The global Ruff check and `git diff --check` pass. Tests use deterministic model doubles and real local SQLite/MemorySaver state. Live backend tests require `TEST_REDIS_URL` / `TEST_POSTGRES_DSN` and their packages; RedisSaver requires a Redis server with its required search/JSON capabilities. Default/Redis Compose configurations validate, an offline wheel build and extracted API/CLI/data smoke checks pass, and `pip check` passes. A live llama.cpp run, Docker image build, real Redis/Postgres run, and telemetry collector run were not performed in this environment.
+Initial local verification: **333 tests passed; 3 optional live-backend tests skipped**. The global Ruff check and `git diff --check` pass. Tests use deterministic model doubles and real local SQLite/MemorySaver state. Live backend tests require `TEST_REDIS_URL` / `TEST_POSTGRES_DSN` and their packages; RedisSaver requires a Redis server with its required search/JSON capabilities. Default/Redis Compose configurations validate, an offline wheel build and extracted API/CLI/data smoke checks pass, and `pip check` passes.
+
+Follow-up validation enabled the optional backends and added real process crashes:
+**340 tests passed with no skips** before the subsequent grader corrections. The image
+built with all optional integrations, Redis/Postgres recovery passed, a collector
+received the exported span, and a real-model Docker API job recovered after SIGKILL.
+See [live validation](VALIDATION.md) for evidence, exact scope and reproduction commands.
 
 Historical real-model row files were preserved. Reports/metrics/figures were regenerated from them with corrected tie handling and provenance labels. Old rows without acquisition manifests remain explicitly historical/unverified; updated evidence/grading code requires fresh model acquisition before making current-model calibration claims. Manual review of a representative set of correctness labels and a held-out end-to-end final-answer evaluation remain necessary.
 

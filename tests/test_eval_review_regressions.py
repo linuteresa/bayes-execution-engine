@@ -6,10 +6,10 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from eval.answerers import ReplayAnswerer, SimulatedAnswerer
+from eval.answerers import LlamaAnswerer, ReplayAnswerer, SimulatedAnswerer
 from eval.datasets import EvalItem, load_items, load_jsonl
 from eval.grading import contains_match, extract_numbers, numeric_match
-from eval.harness import metadata_from_rows, read_rows, run_harness, write_rows
+from eval.harness import metadata_from_rows, read_rows, run_harness, run_metadata, write_rows
 from eval.learning import split_rows
 from eval.metrics import risk_coverage
 from eval.provenance import file_digest
@@ -106,6 +106,21 @@ def test_rows_preserve_versioned_collection_config_and_replay_inherits_it(tmp_pa
     assert provenance["dataset_spec"] == experiment["dataset_spec"]
     assert provenance["sample_source"]["sha256"] == file_digest(path)
     assert provenance["sample_source"]["experiment_id"] == experiment["experiment_id"]
+
+
+def test_recorded_weights_identity_changes_the_resumable_experiment(monkeypatch):
+    monkeypatch.setenv("LLAMA_MODEL_REVISION", "model-manifest-digest")
+    monkeypatch.setenv("LLAMA_WEIGHTS_SHA256", "a" * 64)
+    monkeypatch.setenv("LLAMA_SERVER_VERSION", "ollama-test")
+    # Constructing the client and acquisition metadata makes no inference requests.
+    answerer = LlamaAnswerer()
+    first = run_metadata(answerer, _items(), n_samples=4)
+    assert first["sampling"]["server_weights_revision"] == "model-manifest-digest"
+    assert first["sampling"]["weights_sha256"] == "a" * 64
+    assert first["sampling"]["server_version"] == "ollama-test"
+    monkeypatch.setenv("LLAMA_WEIGHTS_SHA256", "b" * 64)
+    second = run_metadata(answerer, _items(), n_samples=4)
+    assert first["experiment_id"] != second["experiment_id"]
 
 
 def test_legacy_provenance_is_partial_and_cannot_be_relabelled_by_cli_default():

@@ -35,8 +35,10 @@ not overwritten without explicit `--overwrite`.
 Every new row embeds versioned acquisition metadata: the dataset digest and selection,
 sample count, temperature/seed scope, similarity backend/configuration, code fingerprint,
 dependency versions, grading version, model request label, and source experiment when
-replaying. The model request label does not independently identify server-loaded weights;
-record their revision/hash separately. A CLI seed controls dataset order and the simulator,
+replaying. The model request label does not independently identify server-loaded weights.
+Set `LLAMA_MODEL_REVISION`, `LLAMA_WEIGHTS_SHA256` and `LLAMA_SERVER_VERSION` after
+checking the loaded weights; these are recorded in each row and the report and form
+part of the resume identity. A CLI seed controls dataset order and the simulator,
 not the random seed of a live inference server.
 
 `--rows PATH` preserves stored evidence, confidence and correctness labels and recomputes

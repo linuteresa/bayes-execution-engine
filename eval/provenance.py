@@ -119,7 +119,10 @@ def make_experiment(
         "endpoint": public_endpoint(os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:8080/v1"))
         if not replay and simulated is False else None,
         "requested_model": model,
-        "server_weights_revision": "not independently recorded" if simulated is False else None,
+        "server_weights_revision": os.getenv("LLAMA_MODEL_REVISION", "not independently recorded")
+        if simulated is False else None,
+        "weights_sha256": os.getenv("LLAMA_WEIGHTS_SHA256") if simulated is False else None,
+        "server_version": os.getenv("LLAMA_SERVER_VERSION") if simulated is False else None,
         "logprobs_requested": bool(getattr(answerer, "request_logprobs", False)),
     }
     config = {

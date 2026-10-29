@@ -174,16 +174,18 @@ pytest
 
 Offline tests cover the graph, schema failures, evidence, Bayesian updates, uncertainty,
 leased recovery, feedback transactions, HTTP validation, evaluation integrity and scaling.
-Live backend tests are opt-in through `TEST_REDIS_URL` and `TEST_POSTGRES_DSN`. Local review
-verification did not exercise a real model, Docker image build, Redis/Postgres server or
-OTLP collector; the CI matrix is configured separately and is not a claim of local execution.
+Live backend tests are opt-in through `TEST_REDIS_URL` and `TEST_POSTGRES_DSN`;
+`TEST_SERVICE_RECOVERY=1` adds process-crash checks. Follow-up validation exercised a
+Docker image build, real Redis/Postgres, OTLP collector receipt and a real-model Docker
+API recovery smoke test. See [recorded validation and reproduction](docs/VALIDATION.md).
+The CI matrix is configured separately and is not a claim of local execution.
 
 Runtime direct dependencies are pinned where inspected locally. Older-Python scientific
 branches are bounded ranges, and transitive dependencies are not a complete platform lock.
 The wheel includes the engine, API, CLI modules and bundled evaluation questions; the Flask
 UI is run from the source checkout. Remaining work includes authenticated ownership for
 multi-user hosting, real typed tools, independent correctness verifiers, an end-to-end
-confidence evaluation, and live infrastructure validation.
+confidence evaluation, and deployment-specific load/backup/failover validation.
 
 [Original strict review](docs/CODE_REVIEW.md) records the issues found before remediation;
 [remediation status](docs/REMEDIATION.md) describes the implemented fixes and validation limits.

@@ -33,6 +33,23 @@ Wait for the model to finish loading before submitting jobs. `.env` is loaded by
 CLI and Flask entrypoints. `LLAMA_MODEL` is the request label; the loaded server weights
 must be recorded separately for a reproducible experiment.
 
+Keep downloaded weights in `./models/` or a persistent Docker mount. A container's
+`--rm` option removes the container, not the files in its mounted model directory.
+An existing Ollama container can also be reused without downloading its models again:
+
+```bash
+docker start ollama
+docker exec ollama ollama list
+# Set these in .env for the engine, or export them before running evaluation:
+export LLAMA_CPP_BASE_URL=http://127.0.0.1:11434/v1
+export LLAMA_MODEL=qwen2.5:3b-instruct
+```
+
+The Ollama model name must match `ollama list`. This repository's default llama.cpp
+Compose setup expects a host GGUF under `./models`; the local Ollama container keeps
+its weights in its own Docker volume. Docker on macOS uses CPU inference for this
+Ollama image; native llama.cpp can use Metal with a GGUF copied from that cache.
+
 ```bash
 curl -s http://localhost:8000/jobs -H 'Content-Type: application/json' \
   -d '{"question":"Explain RSA and its assumptions.","thread_id":"demo-session"}'
