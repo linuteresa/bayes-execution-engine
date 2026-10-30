@@ -28,9 +28,10 @@ from __future__ import annotations
 import os
 
 from bayesian_engine.bayes_engine import good_probability, resolve_conflict
+from core.runtime import check_deadline
 from core.state import PlanExecuteState
 from core.telemetry import log_conflict_resolution, log_event
-from nodes.llm_executor import execute_step_with_llm
+from nodes.llm_executor import dependency_context, execute_step_with_llm
 
 _CONFLICT_STATE_INDEX = 2
 
@@ -87,6 +88,7 @@ def simple_executor(task: str) -> str:
 
 def executor_node(state: PlanExecuteState, config=None) -> dict:
     """Execute the first task in the plan DAG and resolve any conflict probabilistically."""
+    check_deadline(config)
     if not state.get("plan"):
         return {"response": "No tasks in plan"}
 
@@ -98,7 +100,10 @@ def executor_node(state: PlanExecuteState, config=None) -> dict:
         sampler, mode = _MockToolSampler(current_task), "mock"
 
     result_text, confidence, evidence = _execute_step(
-        sampler, current_task, state.get("input", ""), mode
+        sampler, current_task, state.get("input", ""), mode,
+        context=dependency_context(state.get("past_steps", []),
+                                   state.get("step_confidences", []), current_task),
+        config=config,
     )
 
     return {
@@ -111,8 +116,9 @@ def executor_node(state: PlanExecuteState, config=None) -> dict:
     }
 
 
-def _execute_step(sampler, task: str, goal: str, mode: str) -> tuple[str, float, dict]:
-    exec_result = execute_step_with_llm(sampler, task, goal)
+def _execute_step(sampler, task: str, goal: str, mode: str, *, context="", config=None) -> tuple[str, float, dict]:
+    exec_result = execute_step_with_llm(sampler, task, goal, context=context, config=config,
+                                      n_samples=1 if _evidence_mode() == "keywords" else None)
     evidence = (
         _keyword_evidence(task, exec_result.answer)
         if _evidence_mode() == "keywords"

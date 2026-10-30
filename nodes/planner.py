@@ -1,6 +1,9 @@
 from langchain_core.prompts import ChatPromptTemplate
+from pydantic import ValidationError
 
 from core.json_utils import extract_json
+from core.runtime import ModelOutputError, bounded_model, positive_int
+from core.schemas import Plan
 
 
 def create_planner(model):
@@ -17,15 +20,17 @@ Return ONLY valid JSON with this structure:
     return planner
 
 def planner_node(state, config):
-    model = config.get("configurable", {}).get("model")
-    planner = create_planner(model)
-
-    response = planner.invoke({"input": state["input"]})
-
-    response_text = response.content if hasattr(response, "content") else str(response)
-    data = extract_json(response_text)
-    steps = data.get("steps", []) if isinstance(data, dict) else []
-    if not steps:
-        print(f"[PLANNER] No parseable steps in model output: {response_text[:200]!r}")
-
-    return {"plan": steps}
+    settings = config.get("configurable", {})
+    for attempt in range(positive_int("MODEL_OUTPUT_ATTEMPTS", 2, maximum=3)):
+        planner = create_planner(bounded_model(settings.get("model"), settings.get("deadline")))
+        instruction = state["input"]
+        if attempt:
+            instruction += '\nReturn a JSON object with a nonempty "steps" array of strings.'
+        response = planner.invoke({"input": instruction})
+        text = response.content if hasattr(response, "content") else str(response)
+        try:
+            data = extract_json(text) if isinstance(text, str) else None
+            return {"plan": Plan.model_validate(data).steps}
+        except ValidationError:
+            continue
+    raise ModelOutputError("Planner did not return a valid nonempty plan")
