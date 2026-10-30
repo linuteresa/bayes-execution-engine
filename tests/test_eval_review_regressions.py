@@ -126,7 +126,7 @@ def test_recorded_weights_identity_changes_the_resumable_experiment(monkeypatch)
 def test_legacy_provenance_is_partial_and_cannot_be_relabelled_by_cli_default():
     rows = run_harness(_items(), SimulatedAnswerer())
     rows = [replace(row, experiment={}, source="gsm8k", is_simulated=False) for row in rows]
-    meta = metadata_from_rows(rows, dataset_spec="bundled")
+    meta = metadata_from_rows(rows)
     assert meta["dataset_spec"] == "hf:gsm8k"
     assert meta["provenance_status"] == "legacy_partial"
     assert meta["historical_scores"]

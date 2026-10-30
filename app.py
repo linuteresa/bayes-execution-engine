@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 
 from core.graph import run_execution_engine
-from core.runtime import positive_int
+from core.runtime import MAX_PROMPT_CHARS_CEILING, positive_int
 
 load_dotenv()
 
@@ -20,7 +20,7 @@ app = Flask(__name__)
 @app.route("/")
 def index():
     return render_template("index.html", max_prompt_chars=positive_int(
-        "MAX_PROMPT_CHARS", 16000, maximum=1000000,
+        "MAX_PROMPT_CHARS", 16000, maximum=MAX_PROMPT_CHARS_CEILING,
     ))
 
 
@@ -32,7 +32,7 @@ def ask():
     question = data["question"].strip()
     if not question:
         return jsonify({"error": "Question cannot be empty"}), 400
-    max_chars = positive_int("MAX_PROMPT_CHARS", 16000, maximum=1000000)
+    max_chars = positive_int("MAX_PROMPT_CHARS", 16000, maximum=MAX_PROMPT_CHARS_CEILING)
     if len(question) > max_chars:
         return jsonify({"error": f"Question exceeds {max_chars} characters"}), 400
     try:

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from bayesian_engine.bayes_engine import set_count_source
 from core.graph import checkpoint_thread_id, run_execution_engine
-from core.runtime import positive_float, positive_int
+from core.runtime import MAX_PROMPT_CHARS_CEILING, positive_float, positive_int
 from core.telemetry import log_event
 from persistence.checkpointer import build_checkpointer
 from persistence.job_store import (
@@ -39,7 +39,7 @@ _dispatcher = None
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1,
-                          max_length=positive_int("MAX_PROMPT_CHARS", 16000, maximum=1000000))
+                          max_length=positive_int("MAX_PROMPT_CHARS", 16000, maximum=MAX_PROMPT_CHARS_CEILING))
     thread_id: str | None = Field(None, min_length=1, max_length=128)
 
     @field_validator("question")

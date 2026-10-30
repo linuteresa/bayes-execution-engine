@@ -155,7 +155,7 @@ def test_embeddings_see_agreement_that_word_overlap_misses(monkeypatch):
     """'Yes.' and 'Correct, that is right.' share no words but mean the same thing."""
     same = [1.0, 0.0]
     fake = _FakeEmbeddings({"Yes.": same, "Correct, that is right.": same})
-    monkeypatch.setattr("nodes.llm_executor.build_embeddings", lambda: fake)
+    monkeypatch.setattr("nodes.llm_executor.build_embeddings", lambda **_kwargs: fake)
     model = FakeModel(["Yes.", "Correct, that is right."])
 
     r = execute_step_with_llm(model, "is it right?", n_samples=4)
@@ -169,7 +169,7 @@ def test_embeddings_still_split_answers_with_different_numbers(monkeypatch):
     """Embeddings blur numbers too (0.84 measured live), so the number check stays."""
     v = [1.0, 0.0]
     fake = _FakeEmbeddings({"There are 3 users.": v, "There are 12 users.": v})
-    monkeypatch.setattr("nodes.llm_executor.build_embeddings", lambda: fake)
+    monkeypatch.setattr("nodes.llm_executor.build_embeddings", lambda **_kwargs: fake)
     model = FakeModel(["There are 3 users.", "There are 12 users."])
 
     r = execute_step_with_llm(model, "count users", n_samples=2)

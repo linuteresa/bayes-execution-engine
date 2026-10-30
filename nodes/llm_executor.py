@@ -164,7 +164,7 @@ def _similarity_matrix(samples: list[str], vecs: list[Counter], *, deadline=None
     "Yes." and "Correct, that's right." agree although they share no words.
     """
     n = len(samples)
-    embedder = build_embeddings() if deadline is None else build_embeddings(timeout=remaining_seconds(deadline))
+    embedder = build_embeddings(timeout=remaining_seconds(deadline))
     if embedder is None:
         sim = np.array([[_cosine(vecs[i], vecs[j]) for j in range(n)] for i in range(n)])
         cutoff = _SAME_ANSWER
@@ -192,7 +192,7 @@ def _is_degenerate(s: str) -> bool:
     return any(marker in text for marker in _REFUSAL_MARKERS)
 
 
-def _count_distinct(samples: list[str], sim: list[list[float]], same_answer: float) -> int:
+def _count_distinct(sim: list[list[float]], same_answer: float) -> int:
     """Number of different answers, grouping rewordings of the same one.
 
     Counting exact strings made every long sample "distinct" at temperature > 0, so
@@ -202,7 +202,7 @@ def _count_distinct(samples: list[str], sim: list[list[float]], same_answer: flo
     only the same answer if they also state the same numbers.
     """
     reps: list[int] = []
-    for i in range(len(samples)):
+    for i in range(len(sim)):
         if not any(sim[i][r] >= same_answer for r in reps):
             reps.append(i)
     return len(reps)
@@ -251,7 +251,7 @@ def execute_step_with_llm(
 
 
     answerability = sum(1 for s in samples if not _is_degenerate(s)) / n
-    distinct = _count_distinct(samples, sim, same_answer)
+    distinct = _count_distinct(sim, same_answer)
     distinct_ratio = (distinct - 1) / (n - 1) if n > 1 else 0.0
 
     evidence = {

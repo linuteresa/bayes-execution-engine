@@ -215,7 +215,7 @@ def test_llm_client_has_explicit_request_generation_and_retry_budgets():
 
 
 def test_nonfinite_embeddings_are_rejected(monkeypatch):
-    monkeypatch.setattr("nodes.llm_executor.build_embeddings", lambda:Mock(
+    monkeypatch.setattr("nodes.llm_executor.build_embeddings", lambda **_kwargs: Mock(
         embed_documents=lambda _: [[float("nan"), 0]] * 2))
     with pytest.raises(ValueError, match="invalid vectors"):
         execute_step_with_llm(Mock(invoke=lambda _:"answer"), "question", n_samples=2)

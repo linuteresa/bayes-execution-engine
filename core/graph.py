@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import time
 import uuid
 from typing import Any, Callable, Dict, Literal, Optional
@@ -17,6 +16,7 @@ from langgraph.graph import END, START, StateGraph
 
 from core.llm import build_llm
 from core.runtime import (
+    MAX_PROMPT_CHARS_CEILING,
     ExecutionCancelled,
     ModelOutputError,
     check_deadline,
@@ -133,7 +133,7 @@ def run_execution_engine(
     try:
         if not isinstance(user_input, str) or not user_input.strip():
             raise ValueError("user_input must be a nonempty string")
-        if len(user_input) > positive_int("MAX_PROMPT_CHARS", 16000):
+        if len(user_input) > positive_int("MAX_PROMPT_CHARS", 16000, maximum=MAX_PROMPT_CHARS_CEILING):
             raise ValueError("user_input exceeds MAX_PROMPT_CHARS")
         if resume and not run_id:
             raise ValueError("resume requires an explicit run_id")
@@ -141,6 +141,12 @@ def run_execution_engine(
             raise ValueError("checkpoint_ref requires resume=True")
         if checkpoint_callback is not None and not attempt_id:
             raise ValueError("checkpoint_callback requires an explicit attempt_id")
+        # Worker mode is all-or-nothing. A saver plus an attempt_id without a callback
+        # used to run unfenced AND never publish a reference, so the job's
+        # checkpoint_ref stayed None and the next attempt silently restarted from
+        # scratch -- both halves of durable recovery failing with no error at all.
+        if attempt_id is not None and checkpointer is not None and checkpoint_callback is None:
+            raise ValueError("attempt_id with a saver requires an ownership-checking callback")
         if checkpoint_ref is not None and (checkpointer is None or checkpoint_callback is None):
             raise ValueError("checkpoint_ref requires a saver and ownership-checking callback")
         run_id = run_id or uuid.uuid4().hex
@@ -190,7 +196,7 @@ def run_execution_engine(
                 config["configurable"].update({
                     "model": build_llm(temperature=0.0, timeout=remaining),
                     "executor_model": build_llm(
-                        temperature=float(os.getenv("EXECUTOR_TEMPERATURE", "0.7")),
+                        temperature=positive_float("EXECUTOR_TEMPERATURE", 0.7),
                         timeout=remaining,
                     ),
                 })

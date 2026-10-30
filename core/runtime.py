@@ -15,6 +15,13 @@ class ExecutionCancelled(TimeoutError):
     """The worker no longer owns this execution."""
 
 
+#: Ceiling for MAX_PROMPT_CHARS. It lives here, not at each call site, because a
+#: limit's legal range is a property of the limit: app.py and service/api.py used
+#: 1_000_000 while core/graph.py took the 100_000 default, so MAX_PROMPT_CHARS=200000
+#: passed validation at the API boundary and then failed every job in the engine.
+MAX_PROMPT_CHARS_CEILING = 1000000
+
+
 def positive_int(name: str, default: int, *, maximum: int = 100000) -> int:
     value = int(os.getenv(name, str(default)))
     if not 1 <= value <= maximum:

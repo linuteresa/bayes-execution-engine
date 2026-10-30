@@ -314,7 +314,7 @@ class RowWriter:
         self.stream.close()
 
 
-def metadata_from_rows(rows: Sequence[EvalRow], *, dataset_spec: Optional[str] = None) -> dict:
+def metadata_from_rows(rows: Sequence[EvalRow]) -> dict:
     """Rebuild provenance from the rows themselves, for replay without a model.
 
     Returns ``is_simulated=None`` when the rows predate per-row provenance or disagree

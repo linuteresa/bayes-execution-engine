@@ -114,6 +114,24 @@ class FencedCheckpointer(BaseCheckpointSaver):
     def delete_thread(self, thread_id: str) -> None:
         self.delegate.delete_thread(thread_id)
 
+    def with_allowlist(self, extra_allowlist):
+        """Derive the allowlist on the delegate, keeping one fence for the attempt.
+
+        The base implementation returns ``copy.copy(self)``. On this class that is a
+        shallow clone whose ``_cancelled`` and ``_thread_id`` rebind independently, so
+        a lease loss observed through the clone would leave the original still
+        publishing. Re-wrapping the derived delegate keeps exactly one fence object.
+        """
+        derived = self.delegate.with_allowlist(extra_allowlist)
+        if derived is self.delegate:
+            return self
+        clone = FencedCheckpointer(derived, self.publish_callback)
+        clone._lock = self._lock
+        clone._thread_id = self._thread_id
+        clone._cancelled = self._cancelled
+        clone._checkpoint_hashes = self._checkpoint_hashes
+        return clone
+
     def restore_from(self, reference: dict[str, Any], new_config: dict[str, Any]) -> dict[str, Any]:
         """Clone an exact committed checkpoint, ignoring all pending task writes.
 
@@ -139,7 +157,3 @@ class FencedCheckpointer(BaseCheckpointSaver):
         # Save every channel blob under the new physical thread. Merely copying
         # the checkpoint record would leave the referenced versions unavailable.
         return self.put(destination, checkpoint, metadata, checkpoint["channel_versions"].copy())
-
-
-# Name retained for callers that describe the wrapper by its isolation boundary.
-AttemptCheckpointer = FencedCheckpointer
