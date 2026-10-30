@@ -1,17 +1,26 @@
-# Calibration report
+# Calibration report — historical single-step scores
+
+**Scope: single-step answer confidence.** Each question is evaluated as one execution step. These metrics do not validate confidence in a multi-step final response, the replanner, or the agent's end-to-end stopping policy.
+
+**Analysis only:** this report recomputes metrics from saved answers and labels. Stored confidence, evidence, samples and correctness labels are preserved; no model or embedding requests were made. Risk-coverage now uses expected uniform selection within equal-confidence groups.
+
+**Historical acquisition:** these rows predate versioned experiment manifests and the current evidence/grading implementation. Missing sampling and agreement settings remain unknown. Results characterize the saved scores and labels; they do not establish calibration of the current executor. The learning study refits the current engine on the historical evidence.
 
 ## Provenance
 
 | Field | Value |
 |---|---|
-| Generated (UTC) | 2026-10-28T17:45:07Z |
+| Generated (UTC) | unknown (legacy rows) |
 | Answerer | `replay of local-openai-compatible` |
 | Model | `qwen2.5-3b-instruct-q4_k_m` |
 | Simulated | no |
-| Dataset spec | `bundled` |
+| Dataset spec | `hf:gsm8k+hf:triviaqa` |
 | Items | 500 |
 | Samples per item | 4 |
-| Agreement measure | `embeddings:all-minilm-l6-v2` |
+| Agreement measure | `unknown (legacy rows)` |
+| Provenance schema | legacy / incomplete |
+| Experiment ID | `unknown` |
+| Provenance status | legacy_partial |
 
 Composition: arithmetic × 250, mixed × 250.
 
@@ -21,15 +30,15 @@ ECE and Brier are scale-sensitive, so a raw score never meant to be a probabilit
 
 | Confidence signal | ECE ↓ | Brier ↓ | AUROC ↑ | AURC ↓ | Acc @100% | Acc @80% |
 |---|---|---|---|---|---|---|
-| Bayesian engine (125-cell Dirichlet) | 0.144 | 0.246 [0.233, 0.258] | 0.654 [0.605, 0.701] | 0.469 | 0.412 | 0.470 |
-| Baseline: self-consistency agreement | 0.434 | 0.424 [0.391, 0.457] | 0.617 [0.565, 0.666] | 0.521 | 0.412 | 0.448 |
+| Bayesian engine (125-cell Dirichlet) | 0.144 | 0.246 [0.233, 0.258] | 0.654 [0.605, 0.701] | 0.485 | 0.412 | 0.462 |
+| Baseline: self-consistency agreement | 0.434 | 0.424 [0.391, 0.457] | 0.617 [0.565, 0.666] | 0.522 | 0.412 | 0.448 |
 | Baseline: mean token logprob | 0.424 | 0.406 [0.374, 0.436] | 0.654 [0.604, 0.703] | 0.479 | 0.412 | 0.458 |
 
 ### Verdict
 
 - Confidence separates correct from incorrect answers at AUROC 0.654.
 - ECE is 0.144 over 10 bins; the engine is overconfident on average (mean confidence 0.556 vs accuracy 0.412).
-- Abstaining on the least-confident 20% lifts accuracy on the remainder from 0.412 to 0.470.
+- Abstaining on the least-confident 20% lifts accuracy on the remainder from 0.412 to 0.462.
 - The engine beats *Baseline: self-consistency agreement* on AUROC by 0.037 [0.004, 0.072] (paired bootstrap CI excludes 0).
 - The engine is **not** measurably better than *Baseline: mean token logprob* on AUROC (-0.000 [-0.034, 0.035]; CI straddles 0). On this dataset the 125-cell layer is not adding discrimination over the raw signal.
 
@@ -51,8 +60,8 @@ One averaged number hides the most useful thing in this run: self-consistency ha
 
 | Dataset | Items | Accuracy | ECE ↓ | AUROC ↑ | AUROC (agreement) | Acc @100% | Acc @50% |
 |---|---|---|---|---|---|---|---|
-| gsm8k | 250 | 0.392 | 0.193 | 0.554 [0.480, 0.623] | 0.521 | 0.392 | 0.448 |
-| triviaqa | 250 | 0.432 | 0.108 | 0.743 [0.680, 0.797] | 0.695 | 0.432 | 0.600 |
+| gsm8k | 250 | 0.392 | 0.193 | 0.554 [0.480, 0.623] | 0.521 | 0.392 | 0.444 |
+| triviaqa | 250 | 0.432 | 0.108 | 0.743 [0.680, 0.797] | 0.695 | 0.432 | 0.611 |
 
 ## Fix 2 — closing the learning loop
 
@@ -98,8 +107,8 @@ The executor's 6 continuous signals would give 15,625 naive contexts at 5 bins e
 
 | Model | ECE ↓ | Brier ↓ | AUROC ↑ | Contexts visited |
 |---|---|---|---|---|
-| Hand-designed 125-cell grid | 0.085 | 0.217 [0.205, 0.230] | 0.679 [0.616, 0.741] | 39/125 |
-| Latent PCA grid | 0.064 | 0.235 [0.218, 0.252] | 0.609 [0.540, 0.682] | 50/125 |
+| Hand-designed 125-cell grid | 0.085 | 0.217 [0.205, 0.230] | 0.679 [0.616, 0.741] | 28/125 (train) |
+| Latent PCA grid | 0.064 | 0.235 [0.218, 0.252] | 0.609 [0.540, 0.682] | 50/125 (train) |
 
 ## Figures
 
@@ -118,13 +127,13 @@ The executor's 6 continuous signals would give 15,625 naive contexts at 5 bins e
 ## How to reproduce
 
 ```bash
-python -m eval.run_eval --model llama --dataset bundled --samples 4
+python -m eval.run_eval --rows eval/results/embeddings/rows.jsonl --bins 10 --bootstrap 2000 --seed 0 --abstain 0.2 --test-fraction 0.5
 ```
 
 ## Limitations
 
-- Agreement is bag-of-words cosine, so paraphrases read as disagreement and the confidence signal is pessimistic on verbose answers.
+- The acquisition agreement configuration is unknown for these legacy rows.
 - Grading is normalized alias containment / numeric match: a correct answer phrased unusually can be scored wrong, which shows up as apparent overconfidence.
 - Self-consistency measures agreement, not truth. A model that is confidently and consistently wrong scores high here by construction.
-- Risk-coverage ties are broken by row order, so the curve is slightly pessimistic when many items share a confidence — which happens whenever the evidence is a coarse 5-level ordinal.
+- Intermediate risk-coverage points assume uniform random selection within a boundary tie group. A confidence threshold alone cannot separate equal scores.
 

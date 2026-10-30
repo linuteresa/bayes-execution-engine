@@ -1,0 +1,70 @@
+{
+  "schema_version": 2,
+  "experiment": {
+    "schema_version": 2,
+    "confidence_scope": "single_step",
+    "answerer": "simulated",
+    "model": "simulated-answerer",
+    "is_simulated": true,
+    "dataset_spec": "bundled",
+    "dataset_digest": "9d02a1780a667ec146c45390d3d50b28cd56917efbec84ccb113330fe65d22d8",
+    "limit_per_component": null,
+    "n_items": 80,
+    "n_samples_per_item": 4,
+    "sampling": {
+      "temperature": 0.7,
+      "seed": 0,
+      "seed_scope": "dataset order and simulator; live server sampling is not seeded",
+      "endpoint": null,
+      "requested_model": "simulated-answerer",
+      "server_weights_revision": null,
+      "logprobs_requested": false
+    },
+    "keep_samples": true,
+    "similarity": "word-overlap",
+    "similarity_config": {
+      "backend": "word-overlap",
+      "endpoint": null,
+      "model": null
+    },
+    "execution": {
+      "code_sha256": "3f8300379c2972bd4ae9d9ebf94478b87287b2200fec2806fa8dfcb09fb935c9",
+      "engine": "fresh_prior_only",
+      "evidence_version": 2
+    },
+    "grading_version": 2,
+    "dependencies": {
+      "numpy": "2.5.4",
+      "scipy": "1.18.1",
+      "langchain-openai": "1.7.3",
+      "scikit-learn": "1.9.1",
+      "datasets": null
+    },
+    "runtime": {
+      "llm_timeout_seconds": "60",
+      "llm_max_tokens": "2048"
+    },
+    "experiment_id": "7d78fdf423e105546305cdfd2769ae58eb141838d71438c8e390e3609911b3f3",
+    "timestamp_utc": "2026-10-28T18:51:42Z",
+    "provenance_status": "versioned",
+    "dataset": {
+      "n_items": 80,
+      "by_difficulty": {
+        "arithmetic": 20,
+        "easy": 20,
+        "hard": 20,
+        "medium": 20
+      },
+      "by_source": {
+        "bundled-dev": 80
+      }
+    }
+  },
+  "collection": {
+    "status": "complete",
+    "completed_items": 80,
+    "expected_items": 80,
+    "updated_at_utc": "2026-10-28T18:51:42Z",
+    "rows_sha256": "d10697e6cccfa00b9081ca5df7a3daf53ebcb2ce3a2d35b7ccdca3a073fe21b2"
+  }
+}
