@@ -15,3 +15,15 @@ docs/
 tests/
 # dev-only calibration harness; not needed at runtime
 eval/
+data/
+*.sqlite3*
+*.npy
+graphify-out/
+.idea/
+.claude/
+.agents/
+.codex/
+.aws/
+build/
+dist/
+*.egg-info/
