@@ -28,7 +28,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from eval.datasets import EvalItem
@@ -254,10 +254,14 @@ class ReplayAnswerer:
     name: str = "replay"
     is_simulated: bool = False
     model_name: str = "unknown"
+    source_metadata: dict = field(default_factory=dict)
+    source_path: str = ""
+    source_sha256: str = ""
 
     @classmethod
     def from_rows(cls, path) -> "ReplayAnswerer":
-        from eval.harness import read_rows
+        from eval.harness import metadata_from_rows, read_rows
+        from eval.provenance import file_digest
 
         rows = read_rows(path)
         if not rows or any(not r.samples for r in rows):
@@ -275,6 +279,9 @@ class ReplayAnswerer:
             # Unknown or mixed provenance is treated as simulated, never as real.
             is_simulated=flags != {False},
             model_name=models.pop() if len(models) == 1 else "unknown",
+            source_metadata=metadata_from_rows(rows),
+            source_path=str(path),
+            source_sha256=file_digest(path),
         )
 
     def sampler_for(self, item: EvalItem, n_samples: int = 4) -> "_ReplaySampler":

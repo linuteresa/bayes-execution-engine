@@ -63,6 +63,24 @@ def test_numeric_match_needs_a_number():
     assert not numeric_match("I am not sure.", ["72"])
 
 
+def test_numeric_match_accepts_conclusions_after_negated_background():
+    assert numeric_match(
+        "Given that 20 streetlights are not working, the total number of functioning "
+        "street lights is 96 - 20 = 76 street lights.", ["76"],
+    )
+    assert numeric_match("There are either 3 or 4 boxes. After checking, the total is 4.", ["4"])
+    assert not numeric_match("The final answer is not 76.", ["76"])
+    assert not numeric_match("The final answer is 76, which is wrong.", ["76"])
+    assert not numeric_match("The final answer is 3 or 4.", ["4"])
+
+
+def test_numeric_match_does_not_replace_purchase_count_with_supporting_budget():
+    prediction = "Therefore, he can buy 4 twenty-five dollar pens with the remaining $100."
+    assert numeric_match(prediction, ["4"])
+    assert not numeric_match(prediction, ["100"])
+    assert numeric_match("The remaining amount is $100.", ["100"])
+
+
 def test_grade_dispatches_and_validates():
     assert grade("Paris is the capital.", ["Paris"], "contains")
     assert grade("The result is 12.", ["12"], "numeric")

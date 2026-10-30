@@ -88,7 +88,20 @@ def load_jsonl(path: Path | str) -> List[EvalItem]:
             items.append(_item_from_obj(json.loads(line), i, path.stem))
     if not items:
         raise ValueError(f"no items in {path}")
+    validate_item_ids(items)
     return items
+
+
+def validate_item_ids(items: Sequence[EvalItem]) -> None:
+    """Reject ambiguous identities before sampling, replay, or resumable collection."""
+    seen = set()
+    for item in items:
+        if not item.id or item.id in seen:
+            raise ValueError(
+                f"duplicate or empty item id {item.id!r}; use unique, namespaced IDs "
+                "when combining datasets"
+            )
+        seen.add(item.id)
 
 
 def load_bundled() -> List[EvalItem]:
@@ -253,6 +266,7 @@ def load_items(
                 f"unknown dataset spec {part!r}; use bundled | jsonl:<path> | hf:<name>"
             )
 
+    validate_item_ids(items)
     if shuffle:
         random.Random(seed).shuffle(items)
     if limit is not None and len(parts) == 1:
@@ -286,4 +300,7 @@ def describe(items: Sequence[EvalItem]) -> Dict[str, object]:
     }
 
 
-__all__ = ["EvalItem", "load_items", "load_jsonl", "load_bundled", "describe", "BUNDLED_PATH"]
+__all__ = [
+    "EvalItem", "load_items", "load_jsonl", "load_bundled", "describe", "BUNDLED_PATH",
+    "validate_item_ids",
+]
