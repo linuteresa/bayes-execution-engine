@@ -1,0 +1,78 @@
+{
+  "schema_version": 2,
+  "experiment": {
+    "schema_version": 2,
+    "confidence_scope": "single_step",
+    "answerer": "replay of local-openai-compatible",
+    "model": "qwen2.5-3b-instruct-q4_k_m",
+    "is_simulated": false,
+    "dataset_spec": "jsonl:eval/data/calibration-500.jsonl",
+    "dataset_digest": "68e91aed18c2fc676d0d3098b43dfa775a33d45f24abdad104d90a6830b750cf",
+    "limit_per_component": null,
+    "n_items": 500,
+    "n_samples_per_item": 4,
+    "sampling": {
+      "temperature": 0.7,
+      "seed": 0,
+      "seed_scope": "dataset order and simulator; live server sampling is not seeded",
+      "endpoint": "http://127.0.0.1:8080/v1",
+      "requested_model": "qwen2.5-3b-instruct-q4_k_m",
+      "server_weights_revision": "ollama-manifest:357c53fb659c5076de1d65ccb0b397446227b71a42be9d1603d46168015c9e4b",
+      "weights_sha256": "5ee4f07cdb9beadbbb293e85803c569b01bd37ed059d2715faa7bb405f31caa6",
+      "server_version": "llama.cpp-0.7.0-build11669-620d2225c",
+      "logprobs_requested": true
+    },
+    "keep_samples": true,
+    "similarity": "word-overlap",
+    "similarity_config": {
+      "backend": "word-overlap",
+      "endpoint": null,
+      "model": null
+    },
+    "execution": {
+      "code_sha256": "17bf2b381a68f5167e2963df85f5f6aca20a0f503cffc010fa348f2db5a67c93",
+      "engine": "fresh_prior_only",
+      "evidence_version": 2
+    },
+    "grading_version": 3,
+    "dependencies": {
+      "numpy": "2.5.4",
+      "scipy": "1.18.1",
+      "langchain-openai": "1.7.3",
+      "scikit-learn": "1.9.1",
+      "datasets": "5.0.1",
+      "matplotlib": "3.11.1"
+    },
+    "runtime": {
+      "llm_timeout_seconds": "60",
+      "llm_max_tokens": "2048"
+    },
+    "sample_source": {
+      "path": "eval/results/2026-10-28-qwen3b-v2-acquisition/rows.jsonl",
+      "sha256": "89d5428f959ca1aa7ddb6d172635adf68227232b9056eef876071b1ee681d40f",
+      "experiment_id": "95deeaee1bed4f825cfdf18764a1cc9879b7bea1b4fd882635fd51faaf4289a5",
+      "provenance_status": "versioned"
+    },
+    "experiment_id": "f382b19887c8316e4f3797971a7a7505f0e150aed277dabd03b5a997fb3580a5",
+    "timestamp_utc": "2026-10-29T02:55:17Z",
+    "provenance_status": "versioned",
+    "dataset": {
+      "n_items": 500,
+      "by_difficulty": {
+        "arithmetic": 250,
+        "mixed": 250
+      },
+      "by_source": {
+        "gsm8k": 250,
+        "triviaqa": 250
+      }
+    }
+  },
+  "collection": {
+    "status": "complete",
+    "completed_items": 500,
+    "expected_items": 500,
+    "updated_at_utc": "2026-10-29T02:55:18Z",
+    "rows_sha256": "ed128089b52ecf92c65ad4d6991a91f6502aef4027801e024b43f7d141ff6733"
+  }
+}
