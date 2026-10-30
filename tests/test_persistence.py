@@ -1,6 +1,6 @@
 """Tests for the job store (durable state for the async service)."""
 
-from persistence.job_store import InMemoryJobStore, Job, build_job_store
+from persistence.job_store import InMemoryJobStore, Job, SQLiteJobStore, build_job_store
 
 
 def test_create_and_get():
@@ -37,9 +37,13 @@ def test_updated_at_changes():
     assert store.get("j3").updated_at >= t0
 
 
-def test_build_default_store_is_in_memory(monkeypatch):
+def test_build_default_store_is_sqlite(monkeypatch, tmp_path):
     monkeypatch.delenv("JOB_STORE", raising=False)
-    assert isinstance(build_job_store(), InMemoryJobStore)
+    monkeypatch.setenv("JOB_DB_PATH", str(tmp_path / "jobs.sqlite3"))
+    store = build_job_store()
+    assert isinstance(store, SQLiteJobStore)
+    assert not isinstance(store, InMemoryJobStore)
+    store.close()
 
 
 def test_job_to_dict_roundtrip():

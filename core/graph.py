@@ -28,6 +28,7 @@ from core.telemetry import span
 from nodes.executor import executor_node
 from nodes.planner import planner_node
 from nodes.replanner import RECHECK_PREFIX, replanner_node
+from persistence.fenced_checkpointer import FencedCheckpointer
 
 _LLM_UNAVAILABLE_PHRASES = (
     "connection error",
@@ -146,6 +147,8 @@ def run_execution_engine(
         # scratch -- both halves of durable recovery failing with no error at all.
         if attempt_id is not None and checkpointer is not None and checkpoint_callback is None:
             raise ValueError("attempt_id with a saver requires an ownership-checking callback")
+        if checkpoint_ref is not None and (checkpointer is None or checkpoint_callback is None):
+            raise ValueError("checkpoint_ref requires a saver and ownership-checking callback")
         run_id = run_id or uuid.uuid4().hex
         deadline = deadline if deadline is not None else time.time() + positive_float("JOB_TIMEOUT_SECONDS", 300)
 
@@ -172,6 +175,11 @@ def run_execution_engine(
         check_deadline(cancellation_config)
         if not resume:
             check_deadline(config)
+        if checkpointer is not None and checkpoint_callback is not None:
+            checkpointer = FencedCheckpointer(checkpointer, checkpoint_callback)
+            if checkpoint_ref is not None:
+                restored = checkpointer.restore_from(checkpoint_ref, config)
+                config["configurable"].update(restored["configurable"])
         app_graph = build_graph(checkpointer=checkpointer)
         checkpoint = app_graph.get_state(config) if checkpointer is not None else None
         has_checkpoint = checkpoint is not None and bool(checkpoint.values)
