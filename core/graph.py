@@ -23,11 +23,11 @@ from core.runtime import (
     positive_float,
     positive_int,
 )
-from core.state import PlanExecuteState
+from core.state import RECHECK_PREFIX, PlanExecuteState
 from core.telemetry import span
 from nodes.executor import executor_node
 from nodes.planner import planner_node
-from nodes.replanner import RECHECK_PREFIX, replanner_node
+from nodes.replanner import replanner_node
 from persistence.fenced_checkpointer import FencedCheckpointer
 
 _LLM_UNAVAILABLE_PHRASES = (

@@ -6,11 +6,10 @@ from pydantic import ValidationError
 from core.json_utils import extract_json
 from core.runtime import ModelOutputError, bounded_model, check_deadline, positive_int
 from core.schemas import Act, PlanAction
-from core.state import PlanExecuteState
+from core.state import RECHECK_PREFIX, PlanExecuteState
 
 #: A step below this confidence is re-checked once, in code, before the model decides.
 LOW_CONFIDENCE = 0.5
-RECHECK_PREFIX = "Re-check: "
 
 
 def _normalize_step(step: str) -> str:

@@ -13,7 +13,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from core.graph import checkpoint_thread_id, run_execution_engine
 from core.llm import build_llm
-from core.numbers import numeric_claims, numeric_values
+from core.numbers import numeric_claims
 from core.runtime import ModelOutputError
 from nodes.executor import executor_node
 from nodes.llm_executor import dependency_context, execute_step_with_llm
@@ -204,7 +204,7 @@ def test_equivalent_numeric_literals_compare_exactly(a,b):
 
 
 def test_numeric_multiplicity_is_retained():
-    assert numeric_values("3 and 3") != numeric_values("3")
+    assert numeric_claims("3 and 3") != numeric_claims("3")
 
 
 def test_llm_client_has_explicit_request_generation_and_retry_budgets():

@@ -1,6 +1,6 @@
 # Review remediation — 2026-10-28
 
-The [strict review](CODE_REVIEW.md) records findings from the original code. The working tree now contains fixes and regression coverage for its nineteen numbered findings. This document describes the resulting behavior and the remaining validation work.
+The [strict review](2026-10-28-review.md) records findings from the original code. The working tree now contains fixes and regression coverage for its nineteen numbered findings. This document describes the resulting behavior and the remaining validation work.
 
 | Review findings | Resulting behavior | Main regression coverage |
 |---|---|---|
@@ -35,11 +35,11 @@ Follow-up validation enabled the optional backends and added real process crashe
 **342 tests passed with no skips** after the grader corrections. The image
 built with all optional integrations, Redis/Postgres recovery passed, a collector
 received the exported span, and a real-model Docker API job recovered after SIGKILL.
-See [live validation](VALIDATION.md) for evidence, exact scope and reproduction commands.
+See [live validation](../VALIDATION.md) for evidence, exact scope and reproduction commands.
 
 Historical real-model row files were preserved. Reports/metrics/figures were regenerated from them with corrected tie handling and provenance labels. Old rows without acquisition manifests remain explicitly historical/unverified.
 
-A subsequent [fresh 500-question run](../eval/results/2026-10-28-qwen3b-v2/REPORT.md)
+A subsequent [fresh 500-question run](../../eval/results/2026-10-28-qwen3b-v2/REPORT.md)
 records current evidence and verified weights identity. Its label audit found two grader
 defects; grading-v3 replay corrects eight labels without changing model responses or
 scores. The audit covers 26 distinct rows, not all 500. Further label auditing, independent

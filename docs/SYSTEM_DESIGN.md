@@ -101,6 +101,18 @@ counts against the local model server's real capacity. Cleanup runs periodically
 expiration is not an instantaneous TTL. API and inference limits are not a substitute for
 external ingress/body-size controls on a public deployment.
 
+## Possible broker-backed topology (not implemented)
+
+The diagram below sketches how this design would scale behind a broker: stateless FastAPI
+replicas publishing to a requests topic, engine workers consuming it, and shared
+Redis/Postgres state with checkpoints.
+
+**None of it is in the current runtime.** Today dispatch is an in-process leased worker pool
+against the job store described above. The diagram is a design sketch, not a description of
+what runs, and is kept here so the scaling path is concrete rather than hand-waved.
+
+![Possible future topology: clients, load balancer, stateless FastAPI replicas, Kafka or RabbitMQ requests and results topics, engine workers, shared Redis or Postgres state and checkpoints](img_1.png)
+
 ## Containers and optional backends
 
 The default Compose path runs a llama.cpp server and an engine with a named SQLite volume.

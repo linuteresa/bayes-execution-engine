@@ -56,6 +56,3 @@ def numeric_claims(text: str) -> tuple[tuple[Fraction, str], ...]:
         claims.append((value, unit))
     return tuple(claims)
 
-
-def numeric_values(text: str) -> tuple[Fraction, ...]:
-    return tuple(value for value, _unit in numeric_claims(text))

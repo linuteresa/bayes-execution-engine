@@ -39,6 +39,7 @@ import numpy as np
 from core.llm import build_embeddings
 from core.numbers import numeric_claims
 from core.runtime import bounded_model, check_deadline, positive_int, remaining_seconds
+from core.state import RECHECK_PREFIX
 
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 EVIDENCE_VERSION = 2
@@ -104,7 +105,7 @@ def dependency_context(past_steps, confidences, task: str) -> str:
     entries = []
     for i in reversed(range(len(past_steps))):
         step, result = past_steps[i]
-        key = step.removeprefix("Re-check: ").strip()
+        key = step.removeprefix(RECHECK_PREFIX).strip()
         entry = {
             "step_id": hashlib.sha256(key.encode()).hexdigest()[:16],
             "task": step[:1000], "result": result[:4000],
@@ -122,7 +123,7 @@ def dependency_context(past_steps, confidences, task: str) -> str:
             break
         entries = candidate
     payload = {"results": entries}
-    if task.startswith("Re-check: "):
+    if task.startswith(RECHECK_PREFIX):
         payload["recheck_reason"] = "The previous attempt scored below 0.5; verify its result."
     return json.dumps(payload, ensure_ascii=False)
 

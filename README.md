@@ -205,5 +205,9 @@ UI is run from the source checkout. Remaining work includes authenticated owners
 multi-user hosting, real typed tools, independent correctness verifiers, an end-to-end
 confidence evaluation, and deployment-specific load/backup/failover validation.
 
-[Original strict review](docs/CODE_REVIEW.md) records the issues found before remediation;
-[remediation status](docs/REMEDIATION.md) describes the implemented fixes and validation limits.
+[Review history](docs/reviews/) records every code review on this repository: the
+[original strict review](docs/reviews/2026-10-28-review.md) and its
+[remediation](docs/reviews/2026-10-28-remediation.md), then the
+[PR #11 review](docs/reviews/2026-10-29-review.md) — 15 findings, 7 fixed and 8 deferred
+with reasons. Two deferred items affect published calibration numbers and are listed as
+open in that index.

@@ -2,6 +2,8 @@
 
 Implementation: `core/graph.py`, `nodes/`, `core/runtime.py` and `core/numbers.py`.
 
+![Execution flow: plan step, N samples, agreement, medoid and evidence vector, Dirichlet posterior, confidence, accept or log conflict, replanner](img.png)
+
 ## Planning and dependency context
 
 Planner → Executor → Replanner shares a typed `PlanExecuteState`. The planner must return
