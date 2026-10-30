@@ -1,39 +1,94 @@
-# Two-service local topology: the engine API + the llama.cpp model server.
-# Bring your own GGUF under ./models and point LLAMA_MODEL_FILE at it.
+# Default: docker compose up --build
+# Redis: docker compose --profile redis up --build llama redis engine-redis
+x-engine: &engine
+  build:
+    context: .
+    args:
+      INSTALL_POSTGRES: ${INSTALL_POSTGRES:-false}
+      INSTALL_TELEMETRY: ${INSTALL_TELEMETRY:-false}
+  depends_on:
+    - llama
+  environment: &engine-env
+    LLAMA_CPP_BASE_URL: http://llama:8080/v1
+    LLAMA_MODEL: ${LLAMA_MODEL:-local-gguf}
+    LLAMA_CPP_API_KEY: ${LLAMA_CPP_API_KEY:-not-needed}
+    API_KEY: ${API_KEY:-}
+    JOB_STORE: sqlite
+    JOB_DB_PATH: /app/data/jobs.sqlite3
+    CHECKPOINTER: memory
+    JOB_MAX_PENDING: ${JOB_MAX_PENDING:-128}
+    JOB_WORKERS: ${JOB_WORKERS:-8}
+    JOB_LEASE_SECONDS: ${JOB_LEASE_SECONDS:-30}
+    JOB_RETENTION_SECONDS: ${JOB_RETENTION_SECONDS:-86400}
+    JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-300}
+    MAX_PROMPT_CHARS: ${MAX_PROMPT_CHARS:-16000}
+    LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+    LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
+    EXECUTOR_SAMPLES: ${EXECUTOR_SAMPLES:-4}
+    EXECUTOR_TEMPERATURE: ${EXECUTOR_TEMPERATURE:-0.7}
+    EXECUTOR_CONTEXT_CHARS: ${EXECUTOR_CONTEXT_CHARS:-12000}
+    EXECUTOR_EVIDENCE: ${EXECUTOR_EVIDENCE:-self-consistency}
+    MAX_STEPS: ${MAX_STEPS:-10}
+    MODEL_OUTPUT_ATTEMPTS: ${MODEL_OUTPUT_ATTEMPTS:-2}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-bayes-execution-engine}
+    OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-false}
+    LANGGRAPH_STRICT_MSGPACK: "true"
+  ports:
+    - "127.0.0.1:${ENGINE_PORT:-8000}:8000"
+  volumes:
+    - engine-data:/app/data
+  stop_grace_period: 360s
+
 services:
   llama:
-    image: ghcr.io/ggml-org/llama.cpp:server
-    command: >
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    command: >-
       -m /models/${LLAMA_MODEL_FILE:-model.gguf}
-      --host 0.0.0.0 --port 8080 -c 4096
+      --host 0.0.0.0 --port 8080 -c 8192
     volumes:
       - ./models:/models:ro
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
 
   engine:
-    build: .
-    depends_on:
-      - llama
+    <<: *engine
+
+  redis:
+    image: ${REDIS_IMAGE:-redis/redis-stack-server:latest}
+    profiles: [redis]
     environment:
-      LLAMA_CPP_BASE_URL: http://llama:8080/v1
-      LLAMA_MODEL: local-gguf
-      JOB_STORE: ${JOB_STORE:-memory}
-      CHECKPOINTER: ${CHECKPOINTER:-memory}
-      LOG_LEVEL: INFO
-    ports:
-      - "8000:8000"
+      REDIS_ARGS: "--appendonly yes --appendfsync always"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  # Optional: meaning-based agreement. Uncomment, then set on the engine service:
-  #   EMBEDDINGS_BASE_URL: http://embeddings:8081/v1
-  # embeddings:
-  #   image: ghcr.io/ggml-org/llama.cpp:server
-  #   command: >
-  #     -hf second-state/All-MiniLM-L6-v2-Embedding-GGUF:Q8_0
-  #     --embeddings --host 0.0.0.0 --port 8081
-  #   ports: ["8081:8081"]
+  engine-redis:
+    <<: *engine
+    profiles: [redis]
+    build:
+      context: .
+      args:
+        INSTALL_REDIS: "true"
+        INSTALL_POSTGRES: ${INSTALL_POSTGRES:-false}
+        INSTALL_TELEMETRY: ${INSTALL_TELEMETRY:-false}
+    depends_on:
+      llama:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *engine-env
+      JOB_STORE: redis
+      CHECKPOINTER: redis
+      REDIS_URL: redis://redis:6379/0
+      REDIS_JOB_PREFIX: ${REDIS_JOB_PREFIX:-bayes}
 
-  # Optional: enable durable job store + checkpoints by setting JOB_STORE=redis
-  # redis:
-  #   image: redis:7-alpine
-  #   ports: ["6379:6379"]
+volumes:
+  engine-data:
+  redis-data:

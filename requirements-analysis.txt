@@ -1,0 +1,4 @@
+# Optional PCA scaling and pgmpy network visualization.
+scikit-learn==1.9.1; python_version >= "3.11"
+scikit-learn>=1.5,<1.8; python_version < "3.11"
+pgmpy==1.1.2
