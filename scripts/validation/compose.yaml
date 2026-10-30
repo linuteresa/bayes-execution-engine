@@ -1,0 +1,33 @@
+# Isolated services for the opt-in integration suite. No model or production data.
+services:
+  redis:
+    image: redis/redis-stack-server@sha256:798ab84d9f266936b034ab11c4d04a2b8e4b441884c5aa7d17ac951eefdf742a
+    environment:
+      REDIS_ARGS: --appendonly yes --appendfsync always
+    ports:
+      - "127.0.0.1:16379:6379"
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  postgres:
+    image: postgres@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+    environment:
+      POSTGRES_USER: bayes_test
+      POSTGRES_PASSWORD: local-validation-only
+      POSTGRES_DB: bayes_test
+    ports:
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U bayes_test -d bayes_test]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  collector:
+    image: otel/opentelemetry-collector@sha256:28b6d41ac51bff6b41ba5e8fe503569ffb9d6a1ea90f7a78419e86f34e44f750
+    command: [--config=/etc/otelcol/config.yaml]
+    volumes:
+      - ./otel.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:14317:4317"

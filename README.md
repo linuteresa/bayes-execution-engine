@@ -1,365 +1,209 @@
 # Bayes Execution Engine
 
-A **Plan-and-Execute** agent (LangGraph) with a **conjugate Bayesian conflict resolver**,
-served behind an **async API**, running entirely on a **local LLM** via
-[llama.cpp](https://github.com/ggml-org/llama.cpp).
+A local Plan-and-Execute agent built with LangGraph. It samples each execution step,
+measures agreement, maps three evidence signals into a Dirichlet posterior, and uses the
+result to trigger a bounded re-check. A FastAPI service provides durable submit/poll jobs
+and transactional feedback learning.
 
-Standard agents "guess again" on conflicting data and loop or hallucinate. This engine
-decouples *planning* from *doing*, scores each step's confidence with a **real Bayesian
-update** driven by how consistently the model answers, and acts on that score: a
-low-confidence step is re-checked, and the replanner sees every step's confidence.
+Answers come from the model's knowledge and earlier step results. There are no live data,
+file, database or web tools. Agreement measures consistency, so a repeated wrong answer can
+still score highly. The final `confidence_score` is a **weakest-step score**, not a calibrated
+probability that the complete response is correct.
 
-Whether that confidence is actually *calibrated* is a falsifiable claim, so the repo ships
-the harness that tests it and reports what it found: on 500 TriviaQA + GSM8K items, with
-embedding-based agreement, the confidence ranks right above wrong answers at **AUROC 0.654**
-(beating raw agreement, tying token logprob) with ECE 0.144, about a third of either baseline.
-On factual recall it is genuinely discriminative — **abstaining on the least-confident half
-lifts accuracy from 0.43 to 0.60**. It also reports where the signal fails, and one trade-off
-the latest changes introduced. See **[Calibration](#calibration-measuring-the-confidence-claim)**.
+## Run locally
 
----
-
-## Architecture
-
-A LangGraph `StateGraph`: a shared `PlanExecuteState` flows Planner → Executor →
-Replanner; the executor calls the Bayesian engine when a step is uncertain. The replanner
-sees each step's confidence, re-checks any step below 0.5 once (a hard rule in code, not a
-prompt), and stops after `MAX_STEPS`. The run's reported confidence is its weakest step,
-counting a re-check in place of the attempt it re-checked.
-
-![architecture](img.png)
-
-For long-running prompts an async API decouples the work so HTTP requests never time out
-(`POST /jobs` → poll `GET /jobs/{id}`; `POST /jobs/{id}/feedback {correct}` teaches the
-engine from a verdict on the answer). In-repo that's a `ThreadPoolExecutor`; the same
-contract maps to a Kafka/RabbitMQ + Celery deployment — see
-[docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md).
-
-![event-driven flow](img_1.png)
-
----
-
-## Execution model: self-consistency → real evidence
-
-The executor runs each step by **sampling the model N times** (temp > 0) and measuring how
-much the samples agree (self-consistency, Wang et al. 2022). From that it derives three
-ordinal signals — `DataQuality` (agreement), `TaskStatus` (answerability), `ToolReliability`
-(answer dispersion) — and feeds them to the Bayesian engine. The medoid (consensus) answer
-flows on; the agreement drives confidence. So conflicts fire on **genuine model
-uncertainty**, not keywords.
-
-Agreement is word-overlap cosine by default. Point `EMBEDDINGS_BASE_URL` at a second
-llama-server running a small embedding model and it compares **meaning** instead ("died in
-1912" vs "his death occurred in 1912": 0.38 on words, 0.95 on embeddings). Neither measure
-catches contradictions, so two samples only count as the same answer if they also state the
-same numbers.
-
-**One evidence path.** With no model the executor swaps in a deterministic *mock tool* that
-sometimes returns conflicting readings — but its samples are measured exactly like a live
-model's, so the offline suite exercises the real machinery. The older keyword extractor
-(`core/signals.py`) is no longer on the agent path; it survives as an explicit opt-in
-(`EXECUTOR_EVIDENCE=keywords`) for deployments with no sampling budget. Detail:
-[docs/EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md).
+Python 3.10+ is declared; the current local verification used Python 3.14. Scientific
+requirements use compatibility branches for older Python versions. Start with a virtual
+environment, then follow [QUICKSTART.md](QUICKSTART.md).
 
 ```bash
-python demo.py --sim     # no model needed; shows the mechanism
-```
-```
-CONFIDENT  "capital of France?"           self-consistency 1.00  CONFIDENCE 0.72  (CERTAIN)
-AMBIGUOUS  "Bitcoin price next Tuesday?"  self-consistency 0.15  CONFIDENCE 0.34  (conflict)
-```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env
 
----
+# In a separate terminal, load your own model weights.
+llama-server -m ./models/model.gguf --host 127.0.0.1 --port 8080 -c 8192
 
-## What you can ask it
-
-Answers come from the **local model's own knowledge** (no web, no private data). Best fits:
-explanations, comparisons, and decomposable multi-step reasoning (e.g. *"Explain how RSA
-works and why it's secure"*). The point to demo is the **confidence contrast**: solid topics
-score high; obscure/ambiguous ones scatter and confidence drops. Poor fits (by design):
-real-time info, private data, hard trivia/math — self-consistency correctly reports low
-confidence there.
-
----
-
-## The Bayesian core
-
-For each of the `5×5×5 = 125` signal contexts, `P(Outcome | context)` is **Categorical**;
-its conjugate prior is the **Dirichlet** — that's the whole reason it's the right tool:
-
-- **Conjugacy** ⇒ posterior in closed form, `α_post = α_prior + counts`. O(1) online updates,
-  reproducible, no sampling.
-- Lives on the **simplex** ⇒ every predictive column is a valid distribution by construction.
-- `α₀ = Σα` **is** the effective sample size ⇒ free **credible intervals** that shrink with data.
-
-```python
-resolve_conflict({"TaskStatus": 4, "DataQuality": 4, "ToolReliability": 4})
-# {"state": "AMBIGUOUS",
-#  "confidence": 0.43, "credible_interval": [0.18, 0.69],          # P(MAP state)
-#  "good_confidence": 0.16, "good_credible_interval": [0.02, 0.39], # P(CERTAIN)+P(HIGH)
-#  "effective_sample_size": 13.0, ...}
+python main.py "Compare REST and gRPC and when to use each."
+uvicorn service.api:app --host 127.0.0.1 --port 8000
+# Optional synchronous local UI, from this source checkout:
+python app.py
 ```
 
-Two pairs, deliberately distinct: the system reports and acts on `good_confidence`, so that is the one
-with `good_credible_interval` around it. Pairing a confidence with the other interval attaches
-a band to a quantity it doesn't describe — it need not even contain the number.
-
-**Why 125?** Not "optimal" — it's `5³` (three signals × five ordinal levels), a granularity
-choice: too coarse can't separate "uncertain" from "contradictory"; too fine leaves each
-cell unvisited (curse of dimensionality). Richer input is handled by reducing dimensions,
-not growing the table. Full derivation: [docs/BAYESIAN_DESIGN.md](docs/BAYESIAN_DESIGN.md).
-
----
-
-## Calibration: measuring the confidence claim
-
-A confidence number is only worth the evidence behind it, so `eval/` runs the **real
-execution path** over questions with gold answers and logs one row per item — the evidence
-triple, the continuous signals behind it, engine confidence, credible interval, ESS, the
-medoid answer, and correctness. From those rows it produces a reliability diagram and ECE,
-Brier with a bootstrap CI, AUROC of confidence as a correctness detector, and a
-risk-coverage curve (*abstain on the least-confident 20%, keep this much accuracy*).
+CLI, Flask and FastAPI load `.env`. The API defaults to SQLite at `./data/jobs.sqlite3` and
+an in-process checkpoint saver. Jobs, verdicts and learned counts survive a restart;
+resuming mid-graph requires Redis or Postgres checkpoints. With memory checkpoints, a
+recovered job restarts the pure model workflow when its saved checkpoint is unavailable.
 
 ```bash
-pip install -r requirements.txt -r requirements-eval.txt
-llama-server -m ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080
-
-python -m eval.run_eval --model llama --dataset hf:triviaqa+hf:gsm8k --limit 250
-python -m eval.run_eval --model sim  --dataset bundled      # offline, no model needed
+curl -s http://localhost:8000/jobs -H 'Content-Type: application/json' \
+  -d '{"question":"Explain RSA and its assumptions."}'
+curl -s http://localhost:8000/jobs/JOB_ID
+curl -s http://localhost:8000/jobs/JOB_ID/feedback \
+  -H 'Content-Type: application/json' -d '{"correct":true}'
 ```
 
-Two baselines the Dirichlet layer has to beat, compared by **paired bootstrap** on the same
-items: raw self-consistency agreement on its own, and mean token logprob. If the 125-cell
-table doesn't beat plain agreement, that is a result too, and the report says so in those
-words — `test_verdict_calls_out_a_losing_engine` pins that behaviour.
+Set `API_KEY` to require `Authorization: Bearer TOKEN` on API routes other than `/health`.
+This is a shared token for trusted callers, with shared learning state. There is no
+per-user ownership or tenant authorization model; a `thread_id` is a session label.
 
-### Results (current code)
+## Execution and recovery
 
-500 items (250 TriviaQA + 250 GSM8K, the same items as the first run), 4 samples each,
-Qwen2.5-3B-Instruct Q4_K_M on llama-server. Sampled **once** with `--keep-samples`, then the
-identical samples were scored under both agreement measures with `--model replay:`, so the
-comparison below is the measure and nothing else. Reports:
-**[embeddings](eval/results/embeddings/REPORT.md)** ·
-**[word-overlap](eval/results/word-overlap/REPORT.md)**.
+Planner → Executor → Replanner shares typed state. Each executor prompt includes bounded
+prior results, so dependent steps can use earlier work. Planner and replanner JSON are
+validated against explicit action schemas; repeated invalid output, unavailable inference
+and expired deadlines return errors with zero confidence.
 
-| Confidence signal | ECE ↓ | Brier ↓ | AUROC ↑ |
-|---|---|---|---|
-| **Engine, embedding agreement** | **0.144** | **0.246** [0.233, 0.258] | **0.654** [0.605, 0.701] |
-| Engine, word-overlap agreement | 0.145 | 0.259 [0.245, 0.273] | 0.601 [0.553, 0.651] |
-| Baseline: raw embedding agreement | 0.434 | 0.424 | 0.617 |
-| Baseline: mean token logprob | 0.424 | 0.406 | 0.654 |
+The executor samples four answers by default. Word-overlap cosine measures agreement;
+`EMBEDDINGS_BASE_URL` enables embedding cosine. Evidence version 2 preserves numeric signs,
+decimals, scientific notation, fractions and percentages, guards differing numeric claims
+and units before consensus, and accepts short valid answers. Neither measure establishes
+factual truth or detects every contradiction.
 
-**Embeddings help, and the gain is real.** On identical samples, switching the measure moves
-AUROC **+0.053 [+0.024, +0.082]** and Brier −0.013 [−0.022, −0.006] (paired bootstrap, both
-exclude 0); ECE is unchanged. With embeddings the engine now beats raw agreement on AUROC
-(+0.037 [+0.004, +0.072]) and ties token logprob, which it used to lose to.
+Steps below 0.5 get one forced re-check unless all samples refused. The loop stops after
+`MAX_STEPS`, a job deadline, or a valid final response. Re-checks replace earlier attempts
+when computing the weakest-step score. See [execution details](docs/EXECUTION_MODEL.md).
 
-The gain is all on factual recall:
+The API persists jobs before accepting them, claims them with expiring leases, and rejects
+stale-worker completion. Each claimed attempt writes isolated checkpoints and publishes an
+exact recovery reference only while it owns the job. Recovery uses that committed state;
+model calls can repeat across failures. This is not an exactly-once external-tools engine.
 
-| Dataset | Words AUROC | **Embeddings AUROC** | Δ [95% CI] | Acc @100% → @50% (emb) |
-|---|---|---|---|---|
-| TriviaQA | 0.647 | **0.743** [0.680, 0.797] | **+0.096** [+0.058, +0.137] | 0.432 → **0.600** |
-| GSM8K | 0.549 | 0.554 [0.480, 0.623] | +0.005 [−0.034, +0.044] | 0.392 → 0.448 |
+Defaults are 128 pending jobs, 8 worker threads, a 300-second submission-to-completion
+budget, 60-second inference requests and 24-hour terminal-job retention. Capacity returns
+HTTP 429. Retention removes terminal jobs and their checkpoint threads while retaining
+aggregate feedback counts. See [system design](docs/SYSTEM_DESIGN.md).
 
-**A trade-off the latest changes made.** `ToolReliability` used to count exact strings; it now
-groups rewordings. Re-scoring the same samples with the old rule isolates that change:
+## Bayesian core and feedback
 
-| AUROC | Old exact-string count | New grouped count |
-|---|---|---|
-| TriviaQA, words | **0.720** | 0.647 |
-| TriviaQA, embeddings | 0.741 | **0.743** |
-| GSM8K, words | 0.444 | 0.549 |
-| GSM8K, embeddings | 0.436 | **0.554** |
+For each of 125 evidence contexts, outcome probabilities have a Dirichlet prior. Counts
+update it by `alpha_posterior = alpha_prior + counts`. The reported single-step score is
+`P(CERTAIN) + P(HIGH)` with its own credible interval; the MAP state's confidence and
+interval are separate quantities.
 
-Grouping costs trivia discrimination under word overlap and buys it back on maths; under
-embeddings it is free on trivia. But it raises the hand-built prior's ECE (0.087 → 0.145 on
-words), because `ToolReliability` now sits at 4 less often (trivia: 32% → 11% of items) and
-confidences rise. Learning from feedback recovers most of that on held-out items — words
-0.141 → 0.042, embeddings 0.138 → 0.085 — but the old rule on words still calibrates best after
-learning (0.027), while embeddings with the new rule discriminate best (held-out AUROC 0.68
-vs 0.60). Which to prefer depends on whether ranking or honest probabilities matters more.
+Fully observed contexts have exact Beta-marginal intervals when SciPy is installed.
+Partially observed queries average matching context predictions with equal weights and
+use reproducibly seeded posterior draws for their intervals. Mean concentration for such
+a query is descriptive, not the concentration of an equivalent Dirichlet posterior.
+See [Bayesian design](docs/BAYESIAN_DESIGN.md).
 
-Accuracy differs from the first run (GSM8K 0.22 → 0.39) because the model build, server and
-step prompt all changed; the two runs aren't a controlled comparison, only the measures above
-are.
+A finished job accepts one strict boolean verdict. Its verdict and per-step count updates
+commit together in SQLite or Redis, and other API workers read that shared count source.
+Run-level feedback still assigns the same verdict to every recorded step: credit assignment
+is coarse. API feedback no longer saves per-process `.npy` snapshots. Legacy `.npy` counts
+and old Redis `job:*` records are not migrated automatically.
 
-### First run (before the evidence changes)
+## Calibration evidence and current scope
 
-500 items (250 TriviaQA + 250 GSM8K), 4 samples each, `qwen2.5:3b-instruct` served locally.
-Full report: **[eval/results/REPORT.md](eval/results/REPORT.md)**.
+The [fresh 500-question run](eval/results/2026-10-28-qwen3b-v2/REPORT.md) uses cached
+Qwen2.5-3B Q4_K_M weights, evidence version 2, word-overlap agreement and grading version 3.
+It makes four fresh model calls per question on the existing 250 TriviaQA + 250 GSM8K
+question set. A label spot-check found numeric-grading errors; all eight changed labels
+are [recorded](eval/results/2026-10-28-qwen3b-v2/LABEL_AUDIT.json), with the original
+acquisition preserved separately.
 
-| Confidence signal | ECE ↓ | Brier ↓ | AUROC ↑ |
-|---|---|---|---|
-| **Bayesian engine (125-cell Dirichlet)** | **0.163** | **0.239** [0.226, 0.254] | 0.629 [0.576, 0.679] |
-| Baseline: self-consistency agreement | 0.402 | 0.393 [0.360, 0.425] | 0.643 [0.590, 0.694] |
-| Baseline: mean token logprob | 0.454 | 0.412 [0.382, 0.441] | **0.690** [0.641, 0.740] |
+| Fresh single-step signal | Accuracy | ECE ↓ | Brier ↓ | AUROC ↑ |
+|---|---:|---:|---:|---:|
+| Bayesian engine | 0.478 | 0.177 | 0.271 | 0.556 |
+| Raw word-overlap agreement | 0.478 | 0.418 | 0.416 | 0.477 |
+| Mean token logprob baseline | 0.478 | 0.355 | 0.342 | 0.770 |
 
-Read honestly, that is a **split decision**, and the split is the interesting part:
+The engine's pooled ranking is weak and worse than token logprob. Its AUROC is 0.799
+within TriviaQA and 0.568 within GSM8K; score distributions differ substantially across
+the datasets. These results identify a confidence-quality gap rather than validate a
+calibrated final-response probability. See [validation scope](docs/VALIDATION.md).
 
-- **The Dirichlet layer buys calibration.** It more than halves ECE against both baselines,
-  which is what you'd expect — it emits an actual posterior probability, while agreement and
-  `exp(mean logprob)` are raw scores that were never on the probability scale.
-- **It does not buy discrimination.** On AUROC it is not measurably better than plain
-  agreement (−0.014 [−0.045, 0.018], CI straddles 0) and is *worse* than mean token logprob
-  (−0.060 [−0.094, −0.028], CI excludes 0). The 125 cells are not adding ranking power over
-  the raw signal.
+The historical real-model rows predate evidence version 2, versioned acquisition manifests
+and the revised grader. Their reports were regenerated **from saved rows only**: original
+answers, evidence, confidence and correctness labels are unchanged; tied-score selective
+prediction is now invariant to input order. Missing acquisition settings remain unknown.
+These historical results do not establish calibration of the current executor or of a
+multi-step final response.
 
-### The signal works in one regime and not the other
+| Historical single-step signal, 500 questions | ECE ↓ | Brier ↓ | AUROC ↑ |
+|---|---:|---:|---:|
+| Engine, embedding agreement | 0.144 | 0.246 | 0.654 |
+| Engine, word overlap | 0.145 | 0.259 | 0.601 |
+| Raw embedding agreement | 0.434 | 0.424 | 0.617 |
+| Mean token logprob baseline | 0.424 | 0.406 | 0.654 |
 
-| Dataset | Items | Accuracy | ECE ↓ | AUROC ↑ | Acc @100% | Acc @50% |
-|---|---|---|---|---|---|---|
-| TriviaQA | 250 | 0.424 | **0.089** | **0.722** [0.654, 0.784] | 0.424 | **0.608** |
-| GSM8K | 250 | 0.220 | 0.278 | 0.529 [0.443, 0.615] | 0.220 | 0.224 |
+On those stored embedding scores, TriviaQA accuracy is 0.432 at full coverage and **0.611**
+at 50% coverage; GSM8K is 0.392 → **0.444**. Intermediate coverage assumes uniform selection
+within a tied group; a confidence threshold alone cannot separate equal scores.
+Embedding GSM8K AUROC is 0.554 with a confidence interval spanning chance. Consistency alone
+is insufficient for reliable arithmetic verification.
 
-On factual recall the confidence is both well calibrated and genuinely discriminative:
-**abstain on the least-confident half and accuracy goes from 0.42 to 0.61.** On arithmetic the
-AUROC confidence interval straddles 0.5 — the signal is indistinguishable from chance.
-
-That is not a bug, it is self-consistency's known failure mode made concrete: agreement
-measures whether the model *repeats itself*, not whether it is *right*. A wrong arithmetic
-method reproduces the same wrong answer on all four samples and looks maximally confident.
-Averaging the two datasets into one AUROC would have reported mediocre discrimination
-everywhere and hidden this entirely.
-
-`eval/results/example-simulated/` additionally shows the output format for a synthetic
-answerer that is *told the gold answer*; it is banner-stamped `SIMULATED (not a result)` and
-exists only to prove the pipeline runs with no model.
-
-### Closing the loop
-
-`engine.observe()` is now actually called. `eval/learning.py` splits the logged rows
-train/test, feeds the train half back through the conjugate update, and scores prior-only
-against posterior on **held-out** data. Observing helps, and the improvement clears its
-confidence interval:
-
-| Engine | ECE ↓ | Brier ↓ | AUROC ↑ |
-|---|---|---|---|
-| Prior only (as shipped) | 0.162 | 0.247 [0.228, 0.266] | 0.594 [0.522, 0.667] |
-| Posterior (250 observations) | **0.107** | **0.225** [0.202, 0.248] | 0.613 [0.542, 0.685] |
-
-ECE change from observing: **−0.055 [−0.107, 0.012]** on held-out items. The point estimate
-improves and the learning curve falls monotonically for most of its length, but **the interval
-straddles zero — at 250 held-out items this run does not establish the gain statistically.**
-Treat it as suggestive, not demonstrated; the honest fix is more items, not a rephrasing.
-Discrimination is unchanged within noise either way, which fits the split decision above:
-counts tell the model *how often a context is right*, not how to rank contexts it already
-separates.
-
-And the credible intervals do what conjugacy says they should, measured rather than asserted:
-
-| Mean ESS (α₀) | 14.4 | 20.7 | 30.0 | 39.0 | 51.5 |
-|---|---|---|---|---|---|
-| **Mean 95% CI width** | 0.438 | 0.383 | 0.308 | 0.305 | 0.243 |
-
-**Context coverage: 42 of 125 cells** were ever visited across 500 items (34%); only 12 saw
-10+ observations. Unvisited cells sit at their prior forever, so that is the honest empirical
-argument for reducing dimensionality rather than growing the table. Running the same rows
-through `scaling/latent_bayes.py` — six continuous signals → PCA → quantile bins, which are
-populated by construction — reaches **64 of 125** cells and a better held-out ECE
-(0.072 vs 0.107) at comparable AUROC.
-
-Full method, metric definitions and limitations: **[docs/CALIBRATION.md](docs/CALIBRATION.md)**.
-
----
-
-## Scaling to 10,000+ states
-
-Discretising 8 raw signals into 5 bins is `5⁸ = 390,625` contexts — unpopulatable. Strategy:
-**reduce, then reason** (`scaling/latent_bayes.py`): standardise → PCA to a few latent axes →
-quantile-bin into a small dense grid → run the same conjugate update. `python
-scaling/latent_bayes.py`:
-
-| Naive states | Latent states | Compression | Variance kept | Accuracy | Baseline |
-|---|---|---|---|---|---|
-| 390,625 | 125 | 3,125× | 0.89 | 0.64 | 0.22 |
-
-The table above is a synthetic demo of the mechanism. The same pipeline is now also fitted
-on **real eval rows** (the executor's six continuous signals) and scored against the
-hand-designed 125-cell grid on identical held-out items — see the coverage section of the
-calibration report. Detail: [docs/SCALING.md](docs/SCALING.md).
-
----
-
-## Running it
-
-Full walkthrough with expected outputs in **[QUICKSTART.md](QUICKSTART.md)**. Local only —
-`ChatOpenAI` just talks to `llama-server`'s OpenAI-compatible endpoint; nothing leaves the box.
+Reports: [embeddings](eval/results/embeddings/REPORT.md),
+[word overlap](eval/results/word-overlap/REPORT.md),
+[first historical run](eval/results/REPORT.md). The first run's held-out learning ECE change
+is −0.055 [−0.107, 0.012], so that run does not demonstrate an improvement statistically.
+The [simulated example](eval/results/example-simulated/REPORT.md) is explicitly told the
+gold answer and is a pipeline demonstration only.
 
 ```bash
-llama-server -m ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080  
-# optional, meaning-based agreement (then set EMBEDDINGS_BASE_URL=http://localhost:8081/v1)
-llama-server -hf second-state/All-MiniLM-L6-v2-Embedding-GGUF:Q8_0 --embeddings --port 8081
-pip install -r requirements.txt                                        
-python main.py "Compare REST and gRPC and when to use each."           
-python app.py                                                         
-uvicorn service.api:app --port 8000                                  
+pip install -r requirements-eval.txt
+# Fresh collection; completed rows are fsynced and acquisition metadata is versioned.
+python -m eval.run_eval --model llama --dataset hf:triviaqa+hf:gsm8k \
+  --limit 250 --keep-samples --out eval/results/new-run
+# Recover an interrupted collection using identical acquisition arguments plus --resume.
+# Reanalyse saved scores without model or embedding requests:
+python -m eval.run_eval --rows eval/results/embeddings/rows.jsonl --out /tmp/bayes-analysis
+# Offline synthetic demonstration:
+python -m eval.run_eval --model sim --out /tmp/bayes-sim
 ```
 
-Or `docker compose up` (engine + model server). Config via env vars (`.env`):
-`LLAMA_CPP_BASE_URL`, `EXECUTOR_SAMPLES`, `EMBEDDINGS_BASE_URL`, `MAX_STEPS`,
-`ENGINE_STATE_PATH`, `JOB_STORE`, `CHECKPOINTER`, `LOG_LEVEL`.
+`--model replay:PATH` re-scores stored samples under the current evidence implementation;
+`--rows PATH` preserves stored scores and labels. These are different experiments.
+Independent live-model replications and an audited end-to-end benchmark remain necessary. See
+[calibration methodology](docs/CALIBRATION.md).
 
----
+## Deployment and optional integrations
 
-## System design, observability, CI
-
-- **Async + stateless** — submit/poll API; swap the worker pool for a broker unchanged.
-- **Persistence / fault tolerance** — pluggable LangGraph checkpointer (Redis/Postgres) +
-  job store; per-session `thread_id` gives multi-tenant isolation and horizontal scaling.
-- **Observability** — `core/telemetry.py` emits structured JSON (and optional OpenTelemetry);
-  each conflict logs confidence, credible interval, ESS, and the evidence coordinates.
-- **CI/CD** — `Dockerfile` (model runs as a separate container) + GitHub Actions: ruff +
-  `pytest` on a 3.10/3.11/3.12 matrix + image build.
-
-Detail: [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md).
-
----
-
-## Testing
-
-**169 unit tests** (conjugate updates, prior monotonicity, self-consistency, evidence-path
-routing, calibration metrics, grading, the learning loop, JSON parsing, DAG routing, scaling,
-job store). Run `pytest`. The Bayesian core is deterministic and the eval has an offline
-answerer, so the whole suite — including the full calibration pipeline end to end — runs with
-no model and no network.
-
----
-
-## Roadmap
-
-- ~~**Calibration eval** — reliability diagrams / ECE to prove confidences are calibrated.~~
-  Built: `eval/`, [docs/CALIBRATION.md](docs/CALIBRATION.md). Headline numbers pending a run
-  against a live model.
-- ~~**Online CPT learning** — feed `(evidence, outcome)` back via `engine.observe`.~~ Built:
-  `eval/learning.py` fits the posterior on a train split and scores it held-out, and the
-  service learns from `POST /jobs/{id}/feedback` (persisted via `ENGINE_STATE_PATH`). The
-  verdict is per run, so every step gets the same outcome — coarse credit assignment.
-- **Beat chance on arithmetic** — GSM8K AUROC is 0.554 with embeddings (CI still straddles 0.5).
-  Agreement can't separate "consistently right" from "consistently wrong", so this needs a
-  signal that isn't self-agreement: verifier sampling, or execution of the derived arithmetic.
-- ~~**Semantic agreement** — swap bag-of-words cosine for embeddings.~~ Built and measured:
-  AUROC +0.053 [+0.024, +0.082] on identical samples, all of it on factual recall. Still open:
-  NLI, since neither measure catches contradictions ("Sydney" vs "Canberra": 0.88).
-- **Confidence-driven control** — partly built: steps below 0.5 get one forced re-check and
-  the replanner sees every score. Still open: using the credible interval, escalating, asking.
-- **Real tools behind the executor** — typed tools/MCP; drive conflict from multi-source
-  disagreement. Until then the step prompt tells the model it has no data access and must
-  not invent records; a live run without that invented user tables.
-- **Broker-backed scaling** — Kafka/RabbitMQ + Celery + shared checkpointer.
-
----
-
-## Repository layout
-
+```bash
+# Default SQLite service + local llama.cpp container; mount ./models/model.gguf first.
+docker compose up --build
+# Modules-capable Redis + installed Redis saver/client + persistent Redis volume:
+docker compose --profile redis up --build llama redis engine-redis
 ```
-bayesian_engine/bayes_engine.py   Dirichlet–Multinomial conjugate engine
-eval/                             calibration harness: metrics, learning loop, report
-core/signals.py | json_utils.py   legacy keyword evidence (opt-in) | tolerant JSON parsing
-core/graph.py | llm.py | telemetry.py   LangGraph wiring | llama.cpp client | logging
-nodes/llm_executor.py             self-consistency execution + evidence
-nodes/                            planner / executor / replanner
-scaling/latent_bayes.py           PCA latent-space scaling PoC
-service/api.py | persistence/     async API | job store + checkpointer
-demo.py                           confident vs ambiguous confidence demo
-tests/ (119) | docs/              pytest suite | design deep-dives
+
+Both API variants bind localhost port 8000, so run one at a time. SQLite lives on the named
+`engine-data` volume; Redis uses `redis-data` with AOF and `appendfsync always`.
+A volume is persistence, not a backup.
+The Redis saver requires JSON and Search support; the profile uses Redis Stack rather
+than a plain Redis 7 image. See the [maintainer requirements](https://pypi.org/project/langgraph-checkpoint-redis/).
+
+Optional dependencies are separate: `requirements-redis.txt`, `requirements-postgres.txt`,
+`requirements-telemetry.txt`, `requirements-analysis.txt`, and `requirements-eval.txt`.
+Setting a requested persistent backend without its package/service is a startup error.
+Postgres is a checkpoint backend; jobs and feedback still use SQLite or Redis.
+
+Structured JSON logs work by default. Install the telemetry requirements before setting
+`OTEL_EXPORTER_OTLP_ENDPOINT` (OTLP/gRPC). Container builds enable optional packages through
+`INSTALL_REDIS`, `INSTALL_POSTGRES` or `INSTALL_TELEMETRY` build arguments. Pin model weights
+and image digests in an actual deployment; default image tags remain mutable.
+
+## Verification and remaining work
+
+```bash
+ruff check .
+pytest
 ```
+
+Offline tests cover the graph, schema failures, evidence, Bayesian updates, uncertainty,
+leased recovery, feedback transactions, HTTP validation, evaluation integrity and scaling.
+Live backend tests are opt-in through `TEST_REDIS_URL` and `TEST_POSTGRES_DSN`;
+`TEST_SERVICE_RECOVERY=1` adds process-crash checks. Follow-up validation exercised a
+Docker image build, real Redis/Postgres, OTLP collector receipt and a real-model Docker
+API recovery smoke test. See [recorded validation and reproduction](docs/VALIDATION.md).
+The CI matrix is configured separately and is not a claim of local execution.
+
+Runtime direct dependencies are pinned where inspected locally. Older-Python scientific
+branches are bounded ranges, and transitive dependencies are not a complete platform lock.
+The wheel includes the engine, API, CLI modules and bundled evaluation questions; the Flask
+UI is run from the source checkout. Remaining work includes authenticated ownership for
+multi-user hosting, real typed tools, independent correctness verifiers, an end-to-end
+confidence evaluation, and deployment-specific load/backup/failover validation.
+
+[Original strict review](docs/CODE_REVIEW.md) records the issues found before remediation;
+[remediation status](docs/REMEDIATION.md) describes the implemented fixes and validation limits.

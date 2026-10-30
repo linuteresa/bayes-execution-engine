@@ -1,222 +1,165 @@
-# Calibration: testing the confidence claim instead of asserting it
+# Calibration methodology and scope
 
-Implementation: `eval/`. Entry point: `python -m eval.run_eval --help`.
+Implementation: `eval/`; entry point: `python -m eval.run_eval --help`.
 
-The README says this engine produces calibrated confidence rather than a vibe. That is a
-falsifiable claim, and until there is a reliability diagram attached to it, it is just a
-sentence. This document describes the machinery that tests it, what each number means,
-and what a result would have to look like to count as a failure.
+## What is measured
 
-## Why this had to exist
+Each question is treated as **one execution step**. The harness samples the executor,
+records its evidence, resolves the same Bayesian step score, selects a consensus answer
+and grades it against gold. This isolates a single-step confidence signal. It does not
+measure planner quality, dependent multi-step reasoning, replanner synthesis or the final
+weakest-step score as a probability of correctness.
 
-Two gaps, both real, both fixed here:
+The historical real-model rows predate evidence version 2 and grading version 2. Their
+reports have been regenerated from stored scores and labels with corrected tie handling;
+no model or embedding requests were made and raw historical rows are unchanged. They do
+not establish calibration of the current executor. Missing acquisition details remain
+unknown rather than being inferred from the current environment.
 
-1. **The posterior was always the prior.** `engine.observe()` was implemented, documented
-   and unit tested, but nothing in `nodes/`, `core/` or `service/` ever called it. With no
-   counts, `alpha_posterior == alpha_prior`, so `resolve_conflict()` was a deterministic
-   closed-form function of three ordinal inputs — an interpretable scoring function in
-   Dirichlet clothing. The conjugacy argument was correct in principle and unexercised in
-   practice.
-2. **No calibration evidence anywhere.** The only accuracy number in the repo (0.64 vs
-   0.22) came from `scaling/latent_bayes.py`, a synthetic PCA demo that is not on the
-   agent path at all.
-
-`eval/learning.py` closes the first. The rest of `eval/` closes the second.
-
-## Pipeline
-
-```mermaid
-flowchart LR
-    ITEMS[Gold-answer questions<br/>bundled / TriviaQA / GSM8K] --> HARNESS
-    HARNESS[eval/harness.py<br/>real execution path, N samples per item] --> ROWS[(rows.jsonl)]
-    ROWS --> METRICS[eval/metrics.py<br/>ECE · Brier · AUROC · risk-coverage]
-    ROWS --> LEARN[eval/learning.py<br/>train/test · engine.observe · coverage]
-    METRICS --> REPORT[eval/report.py<br/>REPORT.md + figures]
-    LEARN --> REPORT
-```
-
-The harness is the only stage that touches a model. It calls the same
-`execute_step_with_llm` → `resolve_conflict` → `good_probability` chain the executor node
-uses, so the confidences being scored are the confidences the agent actually reports —
-nothing is re-derived for the eval's benefit. Everything downstream is a pure function of
-`rows.jsonl`, which is why `--rows` can re-analyse an old run with no model present.
-
-To compare agreement measures fairly, score **the same samples** both ways rather than
-running twice (two runs differ in sampling noise as well as in the measure). Run once with
-`--keep-samples`, then `--model replay:<rows.jsonl>` re-scores those stored samples under
-whatever measure is active now. The replay keeps the source run's provenance, so a
-replayed simulated run is still stamped simulated. Every report records its
-**agreement measure** (`word-overlap` or `embeddings:<model>`).
-
-## What gets logged per item
-
-| Field | Meaning |
-|---|---|
-| `task_status`, `data_quality`, `tool_reliability` | the ordinal evidence triple (the 125-cell context) |
-| `signals` | the six continuous measurements those bins came from |
-| `confidence` | `P(CERTAIN) + P(HIGH)` from the posterior — the number the agent reports |
-| `credible_low/high`, `effective_sample_size` | the Dirichlet's own uncertainty |
-| `agreement` | raw self-consistency, **baseline 1** |
-| `mean_logprob` | mean token logprob, **baseline 2** |
-| `answer`, `gold`, `correct` | the medoid answer graded against gold |
-
-## The metrics, and what each one is for
-
-**ECE + reliability diagram** — bucket items by predicted confidence and compare each
-bucket's mean confidence to its empirical accuracy. This is the direct test of the
-headline claim: perfect calibration puts every bucket on the diagonal.
-
-**Brier score**, with a bootstrap CI over items. A proper scoring rule, so it rewards
-calibration and discrimination jointly.
-
-**AUROC** of confidence as a correctness detector. Can the number tell right from wrong at
-all? 0.5 is chance.
-
-**Risk-coverage curve / AURC.** Rank by confidence, sweep the answering threshold. This is
-the business-legible one: *abstain on the least-confident 20% and accuracy on the rest goes
-from X to Y.*
-
-ECE and Brier are scale-sensitive; AUROC and AURC are rank-based. That distinction decides
-how to read the baseline comparison, because agreement and `exp(mean logprob)` were never
-meant to be probabilities. A raw score can discriminate beautifully and calibrate terribly.
-**Compare on AUROC/AURC; read ECE for whether the number means what it says.**
-
-## The baselines the engine has to beat
-
-1. **Raw self-consistency agreement**, alone, with no Bayesian layer at all.
-2. **Mean token logprob** (reported as `exp(mean logprob)`, the average per-token
-   probability), when the server returns logprobs.
-
-Comparison is by **paired bootstrap** on the same items (`metrics.bootstrap_diff`), which
-removes question difficulty as a source of variance. A CI that excludes zero is real
-separation; one that straddles zero is not.
-
-If the 125-cell Dirichlet layer does not beat plain agreement, that is a finding worth
-reporting, and it says the table is not earning its complexity. `eval/report.py` writes
-that verdict in those words when the numbers say so — see
-`tests/test_eval_report.py::test_verdict_calls_out_a_losing_engine`.
-
-## Closing the loop (`eval/learning.py`)
-
-1. Split rows train/test, stratified by correctness.
-2. Call `engine.observe()` on the train half — the conjugate update, for real.
-3. Score prior-only and posterior on the **held-out** half.
-4. Plot ECE against the number of observations, and credible-interval width against ESS.
-
-**The outcome mapping.** `observe()` wants an outcome in `0..4`; a gold-answer eval gives
-one bit. We collapse onto the endpoints: correct → `CERTAIN`, wrong → `AMBIGUOUS`. Because
-the reported confidence is `P(CERTAIN) + P(HIGH)` and `HIGH` then accrues no counts, the
-posterior confidence in a well-observed context converges to that context's empirical
-accuracy — exactly the quantity a calibrated confidence should equal. Intermediate states
-stay reachable from the prior, so sparse contexts remain smoothly regularized.
-
-## Coverage: is 125 the right number of cells?
-
-125 contexts against a few hundred items means most cells are never visited, and an
-unvisited cell stays at its prior forever. The report states how many of the 125 were ever
-touched. When that number is small, it is the honest empirical argument for reducing
-dimensionality rather than growing the table — so the report also fits
-`scaling/latent_bayes.py` on the same rows (the six continuous signals → PCA → quantile
-bins) and scores it on the same held-out items. Quantile bins are populated by
-construction, which is the entire point. That comparison is what connects the scaling
-module to the rest of the system instead of leaving it an orphan PoC.
-
-## Datasets
-
-`bundled` ships 80 hand-checked items (easy → hard trivia plus 20 arithmetic word
-problems) so the harness runs offline. It is a smoke set, not a headline: **80 items is too
-few for a tight CI**. The reportable run uses a few hundred with a real difficulty spread:
+## Collect, resume, re-score and analyse
 
 ```bash
 pip install -r requirements.txt -r requirements-eval.txt
-llama-server -m ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080
-
-python -m eval.run_eval --model llama --dataset hf:triviaqa+hf:gsm8k --limit 250
+python -m eval.run_eval --model llama --dataset hf:triviaqa+hf:gsm8k \
+  --limit 250 --samples 4 --keep-samples --out eval/results/new-run
+# Repeat the identical acquisition command with --resume after an interruption.
+python -m eval.run_eval --rows eval/results/embeddings/rows.jsonl --out /tmp/bayes-analysis
 ```
 
-You need items the model gets **wrong**. On an all-easy set every answer is correct, AUROC
-is undefined, and the reliability diagram has one point; the harness warns when a run comes
-out degenerate that way.
+Collection writes and fsyncs each completed JSONL observation before moving on. A manifest
+records completion, expected items and a checksum of its durable prefix. Resume validates
+experiment/dataset configuration, saved question identities and that checksum; a torn
+last append can be removed, while malformed complete rows are errors. Existing output is
+not overwritten without explicit `--overwrite`.
 
-## Simulated runs are not results
+Every new row embeds versioned acquisition metadata: the dataset digest and selection,
+sample count, temperature/seed scope, similarity backend/configuration, code fingerprint,
+dependency versions, grading version, model request label, and source experiment when
+replaying. The model request label does not independently identify server-loaded weights.
+Set `LLAMA_MODEL_REVISION`, `LLAMA_WEIGHTS_SHA256` and `LLAMA_SERVER_VERSION` after
+checking the loaded weights; these are recorded in each row and the report and form
+part of the resume identity. A CLI seed controls dataset order and the simulator,
+not the random seed of a live inference server.
 
-`--model sim` uses `eval.answerers.SimulatedAnswerer`, which is *told the gold answer* and
-fabricates samples from it. It exists so the harness, metrics and figures are testable in CI
-with no model. Every artefact it produces is stamped `"is_simulated": true`, the report
-title gets `— SIMULATED (not a result)`, and a warning banner goes at the top. Only
-`--model llama` runs are reportable.
+`--rows PATH` preserves stored evidence, confidence and correctness labels and recomputes
+metrics only. `--model replay:PATH` requires stored samples and re-runs the current
+consensus/evidence/grading logic. Replaying samples under evidence v2 is a new scoring
+experiment, not a correction that silently changes a historical record. Changing the
+similarity backend can also change which medoid answer is graded. Both replay paths
+preserve simulated/unknown provenance conservatively.
 
-## What the first run found
+Analysis records its own code/dependencies/configuration and source-row checksum separately
+from acquisition. Reproduction instructions for historical reports use `--rows`, not a
+made-up bundled dataset or the current model server configuration.
 
-500 items (250 TriviaQA + 250 GSM8K), 4 samples each, `qwen2.5:3b-instruct` served locally.
-Numbers and figures: [../eval/results/REPORT.md](../eval/results/REPORT.md).
+## Labels and baselines
 
-The result is a split decision, and worth stating plainly because it is not the flattering
-version. The Dirichlet layer **more than halves ECE** against both baselines (0.163 vs 0.402
-and 0.454) — expected, since it emits a posterior probability while agreement and
-`exp(mean logprob)` are raw scores. But on **AUROC it is not measurably better than plain
-agreement** (−0.014 [−0.045, 0.018]) and is *worse* than mean token logprob
-(−0.060 [−0.094, −0.028], CI excludes 0). The 125 cells are buying calibration, not ranking
-power.
+Graders prefer the final explicitly labelled/boxed answer over alternatives mentioned in
+reasoning. Alias matching respects token boundaries and rejects explicit negation or
+ambiguity; numeric grading handles signs, decimals, grouped numbers, scientific notation
+and fractions. Grading version 3 scopes negation to the final numeric claim and recognizes
+purchase counts followed by supporting budgets. These are deterministic heuristics, not semantic judges. They can reject
+valid paraphrases and still miss subtle incorrect answers. Audit a representative sample
+of labels before making stronger claims. Historical labels have not been retroactively
+changed to the revised rules.
 
-The per-dataset split is the more useful finding. On TriviaQA: ECE 0.089, AUROC 0.722,
-abstain half → accuracy 0.424 → 0.608. On GSM8K: ECE 0.278, AUROC 0.529 with a CI that
-straddles chance. Self-consistency measures whether the model repeats itself, not whether it
-is right, and a wrong arithmetic method reproduces the same wrong answer on every sample — so
-it looks maximally confident. One averaged AUROC would have reported this as uniformly
-mediocre and hidden the regime boundary, which is why `_per_source` exists.
+Baselines are raw pairwise self-consistency and `exp(mean logprob)` when every sampled
+response has a usable token-logprob value. The latter transforms the mean of per-response
+mean token logprobs; it is a geometric likelihood score, not a calibrated probability that
+the answer is correct. Missing baseline observations remove that comparison rather than
+silently comparing a different subset of questions.
 
-Closing the loop moves held-out ECE from 0.162 to 0.107 after 250 observations, with mean
-credible-interval width falling 0.438 → 0.243 as ESS grows. **The ECE gain does not clear its
-interval** (Δ −0.055 [−0.107, 0.012]): the point estimate improves and the learning curve
-falls for most of its length, but at 250 held-out items the run does not establish the effect
-statistically. Report it as suggestive. The interval-vs-ESS shrinkage, by contrast, is a
-direct property of the posterior rather than an estimated effect, and is not in question.
+## Metrics
 
-Coverage was 42 of 125 contexts across 500 items, only 12 with 10+ observations. The same rows
-through the latent PCA grid reach 64 of 125 and a better held-out ECE (0.072), which is the
-argument for reducing dimensions rather than enlarging the table, now with numbers attached.
+| Metric | Interpretation |
+|---|---|
+| ECE/reliability bins | Compare mean confidence and empirical accuracy in fixed-width bins; bin count matters |
+| Brier | Mean squared error of the score against correctness; proper probability score |
+| AUROC | Ranking of right above wrong answers; ties receive half credit; undefined with one label |
+| Risk-coverage/AURC | Expected retained accuracy/risk as the answered share changes |
 
-## What the second run found
+Within equal-score groups, selective prediction uses the expected accuracy of uniform
+selection. Row permutations cannot manufacture abstention gains. Intermediate points
+require random selection within the boundary tie; a confidence threshold alone includes
+or excludes the whole group. AURC is the mean risk over observation-level coverages.
 
-Same 500 items, Qwen2.5-3B-Instruct Q4_K_M on llama-server, after the evidence changes
-(reworded answers grouped for `ToolReliability`, no-invented-data step prompt). Sampled once;
-the identical samples scored under word overlap and embeddings (`--model replay:`).
+Bootstrap intervals resample questions; paired comparisons resample the same question
+indices for both signals. A confidence interval spanning zero does not establish an
+improvement. Repeated questions are kept together during the train/test split, and item
+IDs must be unique to avoid replay collisions. Bootstrap intervals currently treat rows
+as independent; workloads with repeated questions need an appropriate clustered bootstrap
+before those intervals are interpreted as population uncertainty.
 
-- **Embeddings raise AUROC by +0.053 [+0.024, +0.082]** (paired bootstrap) and Brier by
-  −0.013 [−0.022, −0.006]; ECE is unchanged. The gain is on TriviaQA (0.647 → 0.743,
-  +0.096 [+0.058, +0.137]); GSM8K is flat (0.549 → 0.554). Paraphrased correct answers stop
-  reading as disagreement; maths answers were already near-identical strings.
-- With embeddings the engine **beats raw agreement** (+0.037 [+0.004, +0.072]) and **ties mean
-  token logprob** (−0.000 [−0.034, 0.035]) — in the first run it lost to logprob.
-- **Grouping rewordings is a trade-off.** Restoring the old exact-string count on the same
-  samples (a one-off ablation) gives TriviaQA/words 0.720 vs 0.647 now, GSM8K/words 0.444 vs
-  0.549 now; under embeddings TriviaQA is unaffected (0.741 vs 0.743). It also raises
-  prior-only ECE (0.087 → 0.145 on words) since `ToolReliability = 4` drops from 32% to 11% of
-  trivia items. After learning, held-out ECE is 0.042 (words) and 0.085 (embeddings), against
-  0.027 for the old rule on words; held-out AUROC favours embeddings (0.68 vs 0.60–0.62).
-- Learning's ECE gain clears its interval on words (−0.100 [−0.127, −0.005]) and nearly does
-  on embeddings (−0.054 [−0.117, 0.006]). Coverage: 40 and 39 of 125 cells.
+## Learning and dimensionality reduction
 
-Accuracy moved between runs (GSM8K 0.22 → 0.39), but model build, server and prompt all
-changed at once, so that is not attributable to any one of them.
+Rows split into question-disjoint train/test groups, approximately stratified by label.
+The train half supplies `observe()` counts: correct → `CERTAIN`, wrong → `AMBIGUOUS`.
+Prior and posterior are scored on the same held-out half. Learning curves use that fixed
+test split. The PCA grid is fitted on training signals only, then evaluated on those same
+held-out questions. Coverage comparisons use training coverage consistently for each grid.
 
-### A note on run-to-run variance
+Quantile binning balances marginal axes, not every Cartesian cell. Sparse contexts retain
+their prior. Posterior credible intervals describe uncertainty under the model assumptions;
+they are not frequentist accuracy guarantees or proof of calibration.
 
-Sampling runs at temperature 0.7, so two runs of the same configuration differ. Between the
-first run and the corrected one, engine AUROC moved 0.660 → 0.629 and the learning-loop ECE
-delta went from excluding zero to straddling it. At n=500 (n=250 held-out) that is ordinary
-noise, and it is the reason the headline claims here are hedged to what a single run supports.
-If you want a number to survive an interview, run it three times with different seeds and
-report the spread.
+## Historical results after tie correction
 
-## Known limitations
+| Stored run | Items | ECE | Brier | AUROC |
+|---|---:|---:|---:|---:|
+| Embedding agreement | 500 | 0.144 | 0.246 | 0.654 |
+| Word overlap | 500 | 0.145 | 0.259 | 0.601 |
+| First run, older evidence/prompt/model build | 500 | 0.163 | 0.239 | 0.629 |
 
-- Word-overlap agreement reads paraphrases as disagreement; embeddings fix that (measured
-  above). Neither catches contradictions or changed numbers — that needs NLI.
-- Grading is normalized alias containment / numeric match. An unusually phrased correct
-  answer is scored wrong, which looks like overconfidence.
-- Self-consistency measures agreement, not truth: a model that is confidently and
-  consistently wrong scores high by construction. This bounds how good AUROC can get.
-- Risk-coverage ties break by row order, so the curve is slightly pessimistic when many
-  items share a confidence — which happens whenever evidence is a coarse 5-level ordinal.
+For historical embedding scores, TriviaQA accuracy is 0.432 → **0.611** at 50% coverage;
+GSM8K is 0.392 → **0.444**. Word-overlap equivalents are 0.428 → **0.511** and
+0.392 → **0.431**. The first run gives 0.424 → **0.604** and 0.220 → **0.221**.
+These values replace input-order-dependent tie results. AUROC/ECE/Brier are unchanged
+because historical scores and labels are unchanged.
+
+The embedding GSM8K AUROC interval spans chance. The first-run held-out learning ECE change
+is −0.055 [−0.107, 0.012], so the observed point improvement is not established statistically.
+Differences between first and later acquisition runs are not controlled model comparisons:
+model builds, server and prompts changed. The paired word/embedding sample comparison is
+historical; it does not isolate or evaluate the current numeric-claim guard.
+
+Reports: [embeddings](../eval/results/embeddings/REPORT.md),
+[word overlap](../eval/results/word-overlap/REPORT.md),
+[first run](../eval/results/REPORT.md). The
+[simulated example](../eval/results/example-simulated/REPORT.md) was refreshed with current
+code and includes a versioned manifest, but the sampler is told the gold answer. It proves
+pipeline execution only and is banner-stamped as not a calibration result.
+
+## Fresh run and label audit
+
+The [2026-10-28/29 run](../eval/results/2026-10-28-qwen3b-v2/REPORT.md) collected 2,000
+fresh model responses using the existing cached Qwen2.5-3B Q4_K_M GGUF and the 500
+questions already represented in the historical word-overlap rows. Acquisition records
+the independently verified weights hash, server version and a versioned manifest.
+The initial grading-v2 acquisition is preserved; grading-v3 replay changes eight labels
+while preserving every answer, sample, confidence score and evidence vector.
+
+An unblinded 20-label agent spot-check, stratified by source and original correctness,
+found two false negatives. All eight labels changed by the general grader correction
+were then reviewed against the supplied gold answers. This is 26 distinct reviewed rows,
+not a full label audit. Final-answer agreement does not establish correct intermediate
+reasoning. Selection, labels, corrections and checksums are recorded in
+[LABEL_AUDIT.json](../eval/results/2026-10-28-qwen3b-v2/LABEL_AUDIT.json).
+
+The engine has pooled accuracy 0.478, ECE 0.177, Brier 0.271 and AUROC 0.556
+[0.506, 0.606]. Token logprob ranks answers substantially better: AUROC 0.770
+[0.728, 0.810], while its ECE/Brier are worse. Engine AUROC within TriviaQA is 0.799;
+within GSM8K it is 0.568. It is underconfident on arithmetic (mean score 0.301 versus
+accuracy 0.588) and overconfident on trivia (0.550 versus 0.368). Pooling those score
+distributions obscures the within-dataset ranking. Numeric guards also compare
+intermediate claims, so different reasoning can depress agreement despite matching
+final answers. These observations motivate a separate, held-out test of answer-focused
+numeric extraction and independent verification; this benchmark should not become its
+own tuning/test set.
+
+## Next evidence needed
+
+Repeat live-model collections across sampling runs and new held-out questions, expand
+the label audit, and add independent correctness signals. Separately
+run a held-out end-to-end evaluation of final responses and stopping/rechecking decisions.
+Self-consistency can be maximally high for a consistently wrong method, so reliable
+arithmetic or factual verification requires evidence beyond repetition.
