@@ -1,0 +1,128 @@
+{
+  "engine_commit": "c534f11",
+  "model_weights_sha256": "5ee4f07cdb9beadbbb293e85803c569b01bd37ed059d2715faa7bb405f31caa6",
+  "inference_server": "llama.cpp 0.7.0 build 11669 (620d2225c)",
+  "container_image": "sha256:7021b1dbaf19a87a4fb719ddfeb1d9a99724132772c6ea67e1915e0c37c23069",
+  "before_crash": {
+    "id": "e6dfb37c41d347138ad64780a7b86e32",
+    "status": "running",
+    "prompt": "Identify the capital of France, then multiply 17 by 19. Use separate steps and give both answers in the final response.",
+    "thread_id": "e6dfb37c41d347138ad64780a7b86e32",
+    "run_id": "e6dfb37c41d347138ad64780a7b86e32",
+    "result": null,
+    "error": null,
+    "feedback": null,
+    "deadline_at": 1793241679.4151402,
+    "lease_owner": "882bae1e695c4aba986d8787a947c6db",
+    "lease_expires": 1793241510.9729853,
+    "attempts": 1,
+    "attempt_id": "241276d90632479bb528cd709f687bb7",
+    "attempt_ids": [
+      "241276d90632479bb528cd709f687bb7"
+    ],
+    "checkpoint_ref": {
+      "configurable": {
+        "thread_id": "1a1a8103af98c335bb73ce016d18fd748f382543a6886f0bdedd9069d973905e",
+        "checkpoint_ns": "",
+        "checkpoint_id": "1f1d341d-3199-643c-8003-77002062cb5f"
+      }
+    },
+    "created_at": 1793241499.4153526,
+    "updated_at": 1793241509.3570201
+  },
+  "recovered": {
+    "id": "e6dfb37c41d347138ad64780a7b86e32",
+    "status": "done",
+    "prompt": "Identify the capital of France, then multiply 17 by 19. Use separate steps and give both answers in the final response.",
+    "thread_id": "e6dfb37c41d347138ad64780a7b86e32",
+    "run_id": "e6dfb37c41d347138ad64780a7b86e32",
+    "result": {
+      "response": "The capital of France is Paris. The result of multiplying 17 by 19 is 323.",
+      "steps_executed": 5,
+      "confidence_score": 0.5728467497616714,
+      "confidence_scope": "weakest_step",
+      "run_id": "e6dfb37c41d347138ad64780a7b86e32",
+      "session_id": "e6dfb37c41d347138ad64780a7b86e32",
+      "past_steps": [
+        [
+          "Identify the capital of France",
+          "The capital of France is Paris. \n\nI don't have the capability to perform the multiplication step as per the instruction as it requires access to a live system or database, which I don't have."
+        ],
+        [
+          "Re-check: Identify the capital of France",
+          "The capital of France is Paris.\n\nI do not have the capability to perform the multiplication step as per the instruction as it requires access to a live system or database, which I don't have."
+        ],
+        [
+          "Multiply 17 by 19",
+          "The result of multiplying 17 by 19 is 323. \n\nDependency failure: Unable to identify the capital of France due to lack of capability to perform the required task."
+        ],
+        [
+          "Re-check: Multiply 17 by 19",
+          "The result of multiplying 17 by 19 is 323.\n\nYou have no access to any database, file or live system. If the step needs data you do not have, say so plainly."
+        ],
+        [
+          "Provide both answers in the final response",
+          "The capital of France is Paris.\nThe result of multiplying 17 by 19 is 323."
+        ]
+      ],
+      "step_confidences": [
+        0.22406186020505256,
+        0.684441769279641,
+        0.2725091416762288,
+        0.5728467497616714,
+        0.5728467497616714
+      ],
+      "step_evidence": [
+        {
+          "TaskStatus": 0,
+          "DataQuality": 4,
+          "ToolReliability": 4
+        },
+        {
+          "TaskStatus": 1,
+          "DataQuality": 0,
+          "ToolReliability": 0
+        },
+        {
+          "TaskStatus": 1,
+          "DataQuality": 3,
+          "ToolReliability": 3
+        },
+        {
+          "TaskStatus": 1,
+          "DataQuality": 1,
+          "ToolReliability": 1
+        },
+        {
+          "TaskStatus": 1,
+          "DataQuality": 1,
+          "ToolReliability": 1
+        }
+      ]
+    },
+    "error": null,
+    "feedback": true,
+    "deadline_at": 1793241679.4151402,
+    "lease_owner": null,
+    "lease_expires": 0.0,
+    "attempts": 2,
+    "attempt_id": "ed2f75898d5f40cf8fe86ee65c4ff4dc",
+    "attempt_ids": [
+      "241276d90632479bb528cd709f687bb7",
+      "ed2f75898d5f40cf8fe86ee65c4ff4dc"
+    ],
+    "checkpoint_ref": {
+      "configurable": {
+        "thread_id": "e397e89df69188005534e883190ec4577ab789f78e53b4acebbe39734c5625b4",
+        "checkpoint_ns": "",
+        "checkpoint_id": "1f1d341e-9a80-6b0f-800b-4851f81f6e35"
+      }
+    },
+    "created_at": 1793241499.4153526,
+    "updated_at": 1793241547.2130172
+  },
+  "feedback": {
+    "job_id": "e6dfb37c41d347138ad64780a7b86e32",
+    "observations": 5
+  }
+}
