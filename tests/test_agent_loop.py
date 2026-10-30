@@ -97,10 +97,16 @@ def test_executor_records_each_steps_evidence():
 def fresh_engine(monkeypatch, tmp_path):
     """Isolate the shared engine (and its saved state) from other tests."""
     import bayesian_engine.bayes_engine as be
+    from persistence.job_store import SQLiteJobStore
+    from service import api
 
     monkeypatch.setenv("ENGINE_STATE_PATH", str(tmp_path / "engine.npy"))
     monkeypatch.setattr(be, "_DEFAULT_ENGINE", None)
-    return be
+    store = SQLiteJobStore(str(tmp_path / "jobs.sqlite3"))
+    monkeypatch.setattr(api, "_store", store)
+    monkeypatch.setattr(be, "_COUNT_SOURCE", store.observation_counts)
+    yield be
+    store.close()
 
 
 def _done_job(job_id, evidence):
