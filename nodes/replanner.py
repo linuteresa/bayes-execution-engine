@@ -1,9 +1,11 @@
-import os
 import re
 
 from langchain_core.prompts import ChatPromptTemplate
+from pydantic import ValidationError
 
 from core.json_utils import extract_json
+from core.runtime import ModelOutputError, bounded_model, check_deadline, positive_int
+from core.schemas import Act, PlanAction
 from core.state import PlanExecuteState
 
 #: A step below this confidence is re-checked once, in code, before the model decides.
@@ -16,7 +18,7 @@ def _normalize_step(step: str) -> str:
 
 
 def _max_steps() -> int:
-    return int(os.getenv("MAX_STEPS", "10"))
+    return positive_int("MAX_STEPS", 10, maximum=100)
 
 
 def _filter_repeated_steps(steps: list[str], completed_tasks: set[str]) -> list[str]:
@@ -74,8 +76,7 @@ def replanner_node(state: PlanExecuteState, config):
     - If action is Response, set final response
     - If action is Plan, update the plan
     """
-    model = config.get("configurable", {}).get("model")
-    replanner = create_replanner(model)
+    check_deadline(config)
 
     past_steps = state.get("past_steps", [])
     confidences = state.get("step_confidences", [])
@@ -102,29 +103,33 @@ def replanner_node(state: PlanExecuteState, config):
         if not last_task.startswith(RECHECK_PREFIX):
             return {"plan": [RECHECK_PREFIX + last_task] + current_plan}
 
-    response = replanner.invoke({
+    payload = {
         "input": state["input"],
         "plan": str(current_plan),
         "past_steps": _format_past_steps(past_steps, confidences) or "(none)",
         "threshold": LOW_CONFIDENCE,
-    })
+    }
+    settings = config.get("configurable", {})
+    for _attempt in range(positive_int("MODEL_OUTPUT_ATTEMPTS", 2, maximum=3)):
+        replanner = create_replanner(bounded_model(settings.get("model"), settings.get("deadline")))
+        response = replanner.invoke(payload)
+        text = response.content if hasattr(response, "content") else str(response)
+        try:
+            data = extract_json(text) if isinstance(text, str) else None
+            decision = Act.model_validate(data).root
+            break
+        except ValidationError:
+            payload["input"] = state["input"] + (
+                '\nReturn JSON with action="plan" and a string steps array, '
+                'or action="response" and a nonempty string response.'
+            )
+    else:
+        raise ModelOutputError("Replanner did not return a valid decision")
 
-    response_text = response.content if hasattr(response, "content") else str(response)
-    data = extract_json(response_text)
+    if not isinstance(decision, PlanAction):
+        return {"response": decision.response}
 
-    if not isinstance(data, dict):
-        # No parseable decision. If work remains, keep going; otherwise summarise.
-        if current_plan:
-            return {"plan": current_plan}
-        return {"response": _fallback_summary(past_steps)}
-
-    action = data.get("action", "response")
-
-    if action == "response":
-        return {"response": data.get("response") or _fallback_summary(past_steps)}
-
-    # action == "plan"
-    next_steps = _filter_repeated_steps(data.get("steps", []), completed_tasks)
+    next_steps = _filter_repeated_steps(decision.steps, completed_tasks)
     if next_steps:
         return {"plan": next_steps}
     if current_plan:

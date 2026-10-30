@@ -17,12 +17,45 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Dict, Iterator, Optional
 
 _LOGGER_NAME = "bayes_engine"
+_TRACE_ID: ContextVar[str | None] = ContextVar("engine_trace_id", default=None)
+_PROVIDER = None
+_PROVIDER_LOCK = threading.Lock()
+
+
+def configure_telemetry():
+    """Configure OTLP/gRPC export once when explicitly requested by environment.
+
+    Without an endpoint, structured JSON logging remains available with no SDK.
+    Explicit tracing configuration fails visibly when its dependencies are missing.
+    """
+    global _PROVIDER
+    if not os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        return None
+    with _PROVIDER_LOCK:
+        if _PROVIDER is None:
+            try:
+                from opentelemetry import trace
+                from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+                from opentelemetry.sdk.resources import Resource
+                from opentelemetry.sdk.trace import TracerProvider
+                from opentelemetry.sdk.trace.export import BatchSpanProcessor
+            except ImportError as exc:
+                raise RuntimeError("OTLP tracing requires requirements-telemetry.txt") from exc
+            provider = TracerProvider(resource=Resource.create({
+                "service.name": os.getenv("OTEL_SERVICE_NAME", "bayes-execution-engine")
+            }))
+            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            trace.set_tracer_provider(provider)
+            _PROVIDER = provider
+        return _PROVIDER
 
 
 class _JsonFormatter(logging.Formatter):
@@ -51,6 +84,8 @@ def get_logger() -> logging.Logger:
 
 def log_event(event: str, **fields: Any) -> None:
     """Emit a structured JSON log line."""
+    if not fields.get("trace_id") and _TRACE_ID.get():
+        fields["trace_id"] = _TRACE_ID.get()
     get_logger().info(event, extra={"extra_fields": fields})
 
 
@@ -97,25 +132,34 @@ def span(name: str, trace_id: Optional[str] = None, **attributes: Any) -> Iterat
     Uses OpenTelemetry if available + configured, otherwise emits start/end JSON logs
     with a duration. Yields the trace id so callers can correlate child events.
     """
+    provider = configure_telemetry()
     tid = trace_id or uuid.uuid4().hex
+    token = _TRACE_ID.set(tid)
     start = time.perf_counter()
 
     otel_span_cm = None
-    if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        try:
-            from opentelemetry import trace as _otel_trace
+    if provider is not None:
+        from opentelemetry import trace as _otel_trace
 
-            tracer = _otel_trace.get_tracer(_LOGGER_NAME)
-            otel_span_cm = tracer.start_as_current_span(name)
-            otel_span_cm.__enter__()
-        except Exception:
-            otel_span_cm = None
+        tracer = _otel_trace.get_tracer(_LOGGER_NAME)
+        otel_span_cm = tracer.start_as_current_span(name)
+        otel_span = otel_span_cm.__enter__()
+        for key, value in attributes.items():
+            if value is not None:
+                otel_span.set_attribute(key, value)
 
     log_event(f"{name}.start", trace_id=tid, **attributes)
     try:
         yield tid
+    except BaseException as exc:
+        if otel_span_cm is not None:
+            from opentelemetry.trace import Status, StatusCode
+            otel_span.record_exception(exc)
+            otel_span.set_status(Status(StatusCode.ERROR, str(exc)))
+        raise
     finally:
         duration_ms = (time.perf_counter() - start) * 1000.0
         log_event(f"{name}.end", trace_id=tid, duration_ms=round(duration_ms, 2))
         if otel_span_cm is not None:  # pragma: no cover
             otel_span_cm.__exit__(None, None, None)
+        _TRACE_ID.reset(token)
