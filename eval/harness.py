@@ -15,8 +15,10 @@ instead of touching the model again.
 
 from __future__ import annotations
 
+import hashlib
 import json
-import time
+import os
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
@@ -26,9 +28,16 @@ from bayesian_engine.bayes_engine import (
     good_probability,
     outcome_label,  # lives in the engine so the service can use it; re-exported here
 )
-from eval.answerers import is_simulated
-from eval.datasets import EvalItem
+from eval.datasets import EvalItem, validate_item_ids
 from eval.grading import grade
+from eval.provenance import (
+    SCHEMA_VERSION,
+    digest,
+    experiment_fingerprint,
+    inferred_dataset_spec,
+    make_experiment,
+    utc_now,
+)
 from nodes.llm_executor import execute_step_with_llm, similarity_backend
 
 SIGNAL_KEYS = (
@@ -85,6 +94,7 @@ class EvalRow:
     is_simulated: Optional[bool] = None
     answerer: str = ""
     model: str = ""
+    experiment: Dict[str, object] = field(default_factory=dict)
 
     @property
     def context(self) -> tuple[int, int, int]:
@@ -111,6 +121,9 @@ def run_harness(
     engine: Optional[DirichletBayesianEngine] = None,
     keep_samples: bool = False,
     progress: Optional[Callable[[int, int, "EvalRow"], None]] = None,
+    on_row: Optional[Callable[["EvalRow"], None]] = None,
+    experiment: Optional[dict] = None,
+    initial_rows: Sequence[EvalRow] = (),
 ) -> List[EvalRow]:
     """Evaluate every item and return the logged rows.
 
@@ -118,10 +131,32 @@ def run_harness(
     state the shipped system is actually in, which is what Fix 1 is measuring. The
     learning loop later refits an engine from these same rows.
     """
+    if n_samples < 1:
+        raise ValueError("n_samples must be >= 1")
+    validate_item_ids(items)
     eng = engine if engine is not None else DirichletBayesianEngine()
-    rows: List[EvalRow] = []
+    if initial_rows and experiment is None:
+        raise ValueError("resuming requires explicit experiment provenance")
+    experiment = experiment or run_metadata(
+        answerer, items, n_samples=n_samples, keep_samples=keep_samples
+    )
+    if engine is not None:
+        experiment = deepcopy(experiment)
+        experiment["execution"]["engine"] = "provided_engine"
+        experiment["execution"]["state_sha256"] = digest({
+            "prior_strength": engine.prior_strength, "prior_spread": engine.prior_spread,
+            "counts": engine.observation_counts().tolist(),
+        })
+        experiment["experiment_id"] = experiment_fingerprint(experiment)
+    if engine is not None and initial_rows:
+        raise ValueError("resuming a custom learned engine is unsupported")
+    rows: List[EvalRow] = list(initial_rows)
+    validate_resume_rows(rows, items, experiment)
+    completed = {row.item_id for row in rows}
 
-    for i, item in enumerate(items):
+    for item in items:
+        if item.id in completed:
+            continue
         sampler = answerer.sampler_for(item, n_samples=n_samples)
         result = execute_step_with_llm(
             sampler, _prompt_for(item), item.question, n_samples=n_samples
@@ -154,13 +189,18 @@ def run_harness(
             n_samples=n_samples,
             signals={k: float(result.signals.get(k, 0.0)) for k in SIGNAL_KEYS},
             samples=list(result.samples) if keep_samples else [],
-            is_simulated=bool(is_simulated(answerer)),
+            is_simulated=experiment.get("is_simulated"),
             answerer=str(getattr(answerer, "name", type(answerer).__name__)),
             model=str(getattr(answerer, "model_name", "unknown")),
+            experiment=deepcopy(experiment),
         )
+        # A writer callback is deliberately separate from progress: --quiet must not
+        # suppress durable writes, and a failed write must not count an item as saved.
+        if on_row is not None:
+            on_row(row)
         rows.append(row)
         if progress is not None:
-            progress(i + 1, len(items), row)
+            progress(len(rows), len(items), row)
 
     return rows
 
@@ -181,25 +221,100 @@ def write_rows(rows: Sequence[EvalRow], path: Path | str) -> Path:
     """Write rows as JSONL so every downstream stage is a pure function of this file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
+    validate_row_ids(rows)
+    with RowWriter(path, overwrite=True) as writer:
         for row in rows:
-            fh.write(json.dumps(row.as_dict(), ensure_ascii=False) + "\n")
+            writer.append(row)
     return path
 
 
-def read_rows(path: Path | str) -> List[EvalRow]:
+def read_rows(path: Path | str, *, repair_truncated_tail: bool = False) -> List[EvalRow]:
     """Load rows written by :func:`write_rows`."""
     path = Path(path)
     rows = []
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
+    raw = path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    offset = 0
+    for index, line in enumerate(lines):
+        if line.strip():
+            try:
                 rows.append(EvalRow(**json.loads(line)))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                if not (repair_truncated_tail and index == len(lines) - 1
+                        and not line.endswith(b"\n")):
+                    raise
+                # A crash may tear only the final append. Never hide malformed complete
+                # lines or alter a valid preceding row while recovering it.
+                with path.open("r+b") as stream:
+                    stream.truncate(offset)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                break
+        offset += len(line)
+    validate_row_ids(rows)
     return rows
 
 
-def metadata_from_rows(rows: Sequence[EvalRow], *, dataset_spec: str) -> dict:
+def validate_row_ids(rows: Sequence[EvalRow]) -> None:
+    seen = set()
+    for row in rows:
+        if not row.item_id or row.item_id in seen:
+            raise ValueError(f"duplicate or empty item id {row.item_id!r} in rows")
+        seen.add(row.item_id)
+
+
+def validate_resume_rows(rows: Sequence[EvalRow], items: Sequence[EvalItem], experiment: dict) -> None:
+    validate_row_ids(rows)
+    expected = {item.id: item for item in items}
+    for row in rows:
+        item = expected.get(row.item_id)
+        if item is None or (
+            row.question, row.gold, row.grader, row.difficulty, row.source, row.n_samples
+        ) != (
+            item.question, item.answers, item.grader, item.difficulty, item.source,
+            experiment["n_samples_per_item"],
+        ):
+            raise ValueError(f"saved item {row.item_id!r} differs from the requested dataset")
+        if not row.experiment or row.experiment.get("experiment_id") != experiment.get("experiment_id"):
+            raise ValueError(f"saved item {row.item_id!r} has incompatible experiment provenance")
+
+
+class RowWriter:
+    """Append one complete JSONL observation and fsync it before returning."""
+
+    def __init__(self, path: Path | str, *, resume: bool = False, overwrite: bool = False):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.stream = self.path.open("a" if resume else "w" if overwrite else "x", encoding="utf-8")
+        self._digest = hashlib.sha256(self.path.read_bytes())
+        if resume and self.path.stat().st_size:
+            # A valid final line without a newline must still be separated from the next
+            # append. Invalid truncated tails are repaired before opening this writer.
+            with self.path.open("rb") as saved:
+                saved.seek(-1, os.SEEK_END)
+                if saved.read(1) != b"\n":
+                    self.stream.write("\n")
+                    self._digest.update(b"\n")
+
+    def append(self, row: EvalRow) -> None:
+        line = json.dumps(row.as_dict(), ensure_ascii=False, allow_nan=False) + "\n"
+        self.stream.write(line)
+        self.stream.flush()
+        os.fsync(self.stream.fileno())
+        self._digest.update(line.encode("utf-8"))
+
+    @property
+    def sha256(self) -> str:
+        return self._digest.hexdigest()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.stream.close()
+
+
+def metadata_from_rows(rows: Sequence[EvalRow]) -> dict:
     """Rebuild provenance from the rows themselves, for replay without a model.
 
     Returns ``is_simulated=None`` when the rows predate per-row provenance or disagree
@@ -209,34 +324,44 @@ def metadata_from_rows(rows: Sequence[EvalRow], *, dataset_spec: str) -> dict:
     flags = {r.is_simulated for r in rows}
     answerers = {r.answerer for r in rows if r.answerer}
     models = {r.model for r in rows if r.model}
+    experiments = {json.dumps(r.experiment, sort_keys=True) for r in rows}
+    versioned = len(experiments) == 1 and bool(rows) and rows[0].experiment.get("schema_version") == SCHEMA_VERSION
+    meta = deepcopy(rows[0].experiment) if versioned else {}
+    # Caller defaults cannot relabel a stored experiment. Infer known dataset families
+    # for old rows and explicitly retain the fact that their full acquisition is unknown.
     return {
-        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        **meta,
+        "timestamp_utc": meta.get("timestamp_utc", "unknown (legacy rows)"),
+        "analysed_at_utc": utc_now(),
         "answerer": answerers.pop() if len(answerers) == 1 else "unknown",
         "model": models.pop() if len(models) == 1 else "unknown",
         "is_simulated": flags.pop() if len(flags) == 1 else None,
-        "dataset_spec": dataset_spec,
+        "dataset_spec": meta.get("dataset_spec", inferred_dataset_spec(rows)),
+        "provenance_status": meta.get("provenance_status", "legacy_partial"),
+        "confidence_scope": "single_step",
+        "similarity": meta.get("similarity", "unknown (legacy rows)"),
         "n_items": len(rows),
         "n_samples_per_item": rows[0].n_samples if rows else 0,
         "replayed_from_rows": True,
+        "historical_scores": not versioned,
     }
 
 
-def run_metadata(answerer, items, *, n_samples: int, dataset_spec: str) -> dict:
+def run_metadata(
+    answerer, items, *, n_samples: int, dataset_spec: Optional[str] = None,
+    temperature: Optional[float] = None, seed: Optional[int] = None,
+    limit: Optional[int] = None, keep_samples: bool = False,
+) -> dict:
     """Provenance stamped onto every artefact.
 
     ``is_simulated`` is the important field: it is what stops a pipeline smoke-test run
     from being read later as a calibration result for a real model.
     """
-    return {
-        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "answerer": getattr(answerer, "name", type(answerer).__name__),
-        "model": getattr(answerer, "model_name", "unknown"),
-        "is_simulated": is_simulated(answerer),
-        "dataset_spec": dataset_spec,
-        "n_items": len(items),
-        "n_samples_per_item": n_samples,
-        "similarity": similarity_backend(),
-    }
+    return make_experiment(
+        answerer, items, n_samples=n_samples, dataset_spec=dataset_spec,
+        temperature=temperature, seed=seed, limit=limit, keep_samples=keep_samples,
+        similarity=similarity_backend(),
+    )
 
 
 __all__ = [

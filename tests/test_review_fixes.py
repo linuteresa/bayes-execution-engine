@@ -87,7 +87,7 @@ def test_replay_of_orphaned_rows_cannot_claim_to_be_real(tmp_path):
     """A rows file moved away from its metrics.json must not render as a real result."""
     rows = run_harness(load_bundled()[:5], SimulatedAnswerer(seed=0), n_samples=3)
     path = write_rows(rows, tmp_path / "rows.jsonl")   # no metrics.json beside it
-    meta = metadata_from_rows(read_rows(path), dataset_spec="bundled")
+    meta = metadata_from_rows(read_rows(path))
     assert meta["is_simulated"] is True
     assert "SIMULATED" in render_report({"metadata": meta, "signals": {"engine": {}}})
 
@@ -103,7 +103,7 @@ def test_rows_without_provenance_are_unknown_not_real(tmp_path):
         stripped.append(json.dumps(obj))
     path.write_text("\n".join(stripped) + "\n")
 
-    meta = metadata_from_rows(read_rows(path), dataset_spec="bundled")
+    meta = metadata_from_rows(read_rows(path))
     assert meta["is_simulated"] is None          # unknown, not False
     report = render_report({"metadata": meta, "signals": {"engine": {}}})
     assert "UNVERIFIED PROVENANCE" in report
@@ -113,7 +113,7 @@ def test_rows_without_provenance_are_unknown_not_real(tmp_path):
 def test_mixed_provenance_is_also_unknown():
     rows = run_harness(load_bundled()[:4], SimulatedAnswerer(seed=0), n_samples=3)
     rows[0].is_simulated = False                 # rows spliced from two runs
-    assert metadata_from_rows(rows, dataset_spec="bundled")["is_simulated"] is None
+    assert metadata_from_rows(rows)["is_simulated"] is None
 
 
 # ------------------------------------------------- logprob baseline integrity

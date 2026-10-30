@@ -15,6 +15,7 @@ first is a pure function of it, and `--rows` replays an old run without re-sampl
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -25,14 +26,25 @@ from eval.answerers import build_answerer, is_simulated
 from eval.datasets import describe, load_items
 from eval.harness import (
     EvalRow,
+    RowWriter,
     metadata_from_rows,
     read_rows,
     run_harness,
     run_metadata,
-    write_rows,
+    validate_resume_rows,
 )
 from eval.learning import run_learning_study
 from eval.metrics import auroc, bootstrap_diff, brier_score, evaluate_scores, risk_coverage
+from eval.provenance import (
+    SCHEMA_VERSION,
+    code_digest,
+    dependency_versions,
+    experiment_fingerprint,
+    file_digest,
+    json_compatible,
+    utc_now,
+    write_json_atomic,
+)
 from eval.report import SHORT_LABELS, write_report
 
 DEFAULT_OUT = Path("eval/results")
@@ -77,17 +89,68 @@ def collect_rows(args: argparse.Namespace) -> tuple[List[EvalRow], dict]:
             file=sys.stderr,
         )
 
-    rows = run_harness(
-        items,
-        answerer,
-        n_samples=args.samples,
-        keep_samples=args.keep_samples,
-        progress=progress,
-    )
     meta = run_metadata(
-        answerer, items, n_samples=args.samples, dataset_spec=args.dataset
+        answerer, items, n_samples=args.samples, dataset_spec=args.dataset,
+        temperature=args.temperature, seed=args.seed, limit=args.limit,
+        keep_samples=args.keep_samples,
     )
     meta["dataset"] = describe(items)
+    out = Path(args.out)
+    rows_path, manifest_path = out / "rows.jsonl", out / "manifest.json"
+    initial_rows: List[EvalRow] = []
+    if args.resume:
+        if not manifest_path.exists():
+            raise ValueError("--resume requires a versioned manifest.json in --out")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        previous = manifest.get("experiment", {})
+        if previous.get("experiment_id") != experiment_fingerprint(previous):
+            raise ValueError("saved experiment metadata fingerprint is invalid")
+        if manifest.get("schema_version") != SCHEMA_VERSION or previous.get("experiment_id") != meta["experiment_id"]:
+            raise ValueError("resume configuration differs from the saved experiment")
+        meta = previous
+        initial_rows = read_rows(rows_path, repair_truncated_tail=True) if rows_path.exists() else []
+        validate_resume_rows(initial_rows, items, meta)
+        saved = manifest.get("collection", {})
+        saved_count = saved.get("completed_items", 0)
+        if not isinstance(saved_count, int) or not 0 <= saved_count <= len(initial_rows):
+            raise ValueError("saved manifest row count is inconsistent with rows.jsonl")
+        if saved.get("rows_sha256"):
+            prefix = b"".join(rows_path.read_bytes().splitlines(keepends=True)[:saved_count])
+            if hashlib.sha256(prefix).hexdigest() != saved["rows_sha256"]:
+                raise ValueError("saved rows checksum differs from the experiment manifest")
+    elif not args.overwrite and (rows_path.exists() or manifest_path.exists()):
+        raise ValueError("output already contains a run; use --resume, a new --out, or --overwrite")
+
+    completed = len(initial_rows)
+    active_writer = None
+
+    def save_manifest(status: str) -> None:
+        write_json_atomic({
+            "schema_version": SCHEMA_VERSION,
+            "experiment": meta,
+            "collection": {
+                "status": status, "completed_items": completed, "expected_items": len(items),
+                "updated_at_utc": utc_now(),
+                "rows_sha256": active_writer.sha256 if active_writer else (
+                    file_digest(rows_path) if rows_path.exists() else hashlib.sha256(b"").hexdigest()
+                ),
+            },
+        }, manifest_path)
+
+    with RowWriter(rows_path, resume=args.resume, overwrite=args.overwrite) as writer:
+        active_writer = writer
+        save_manifest("collecting")
+        def save_row(row: EvalRow) -> None:
+            nonlocal completed
+            writer.append(row)
+            completed += 1
+            save_manifest("collecting")
+
+        rows = run_harness(
+            items, answerer, n_samples=args.samples, keep_samples=args.keep_samples,
+            progress=progress, on_row=save_row, experiment=meta, initial_rows=initial_rows,
+        )
+    save_manifest("complete")
     return rows, meta
 
 
@@ -96,8 +159,8 @@ def analyse(rows: Sequence[EvalRow], meta: dict, args: argparse.Namespace) -> di
     n_classes = len(set(correct))
     if n_classes < 2:
         print(
-            "WARNING: every item has the same correctness label. AUROC and the "
-            "risk-coverage curve are undefined -- the question set needs a wider "
+            "WARNING: every item has the same correctness label. AUROC is "
+            "undefined and risk-coverage is constant -- the question set needs a wider "
             "difficulty spread to test a confidence signal at all.",
             file=sys.stderr,
         )
@@ -160,6 +223,19 @@ def analyse(rows: Sequence[EvalRow], meta: dict, args: argparse.Namespace) -> di
         "signals": {k: v for k, v in signals.items() if v},
         "comparisons": comparisons,
         "by_source": _per_source(rows, args),
+        "analysis": {
+            "schema_version": SCHEMA_VERSION, "timestamp_utc": utc_now(),
+            "code_sha256": code_digest(analysis=True),
+            "dependencies": dependency_versions(),
+            "seed": args.seed, "bootstrap": args.bootstrap, "bins": args.bins,
+            "abstain_fraction": args.abstain, "test_fraction": args.test_fraction,
+            "learning": not args.no_learning,
+            "risk_coverage_ties": "expected_uniform_selection_within_equal_scores",
+            "confidence_scope": "single_step",
+            "stored_confidence_evidence_and_labels_preserved": bool(args.rows),
+            "source_rows": str(args.rows) if args.rows else str(Path(args.out) / "rows.jsonl"),
+            "source_rows_sha256": file_digest(args.rows or Path(args.out) / "rows.jsonl"),
+        },
     }
 
     if not args.no_learning:
@@ -274,6 +350,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-learning", action="store_true", help="skip the learning study")
     p.add_argument("--keep-samples", action="store_true", help="store raw samples in rows.jsonl")
     p.add_argument("--rows", default=None, help="re-analyse an existing rows.jsonl (no model)")
+    p.add_argument("--resume", action="store_true", help="resume --out after validating dataset and experiment configuration")
+    p.add_argument("--overwrite", action="store_true", help="replace an existing collected run in --out")
     p.add_argument("--out", default=str(DEFAULT_OUT), help=f"output dir (default: {DEFAULT_OUT})")
     p.add_argument("--quiet", action="store_true", help="suppress per-item progress")
     return p
@@ -281,6 +359,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.samples < 1 or args.bins < 1 or args.bootstrap < 1:
+        raise ValueError("--samples, --bins and --bootstrap must be >= 1")
+    if args.limit is not None and args.limit < 1:
+        raise ValueError("--limit must be >= 1")
+    if not 0 <= args.abstain < 1 or not 0 < args.test_fraction < 1:
+        raise ValueError("--abstain must be in [0, 1), --test-fraction in (0, 1)")
+    if args.resume and (args.rows or args.overwrite):
+        raise ValueError("--resume cannot be combined with --rows or --overwrite")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -292,7 +378,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # Provenance comes from the rows, not from whatever metrics.json happens to sit
         # next to them: a rows file can be moved or shared alone, and stale adjacent
         # metadata could label a different run entirely.
-        meta = metadata_from_rows(rows, dataset_spec=args.dataset)
+        meta = metadata_from_rows(rows)
         if meta["is_simulated"] is None:
             print(
                 "WARNING: these rows carry no provenance (written before it was "
@@ -305,14 +391,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "by_difficulty": _count(rows, "difficulty"),
             "by_source": _count(rows, "source"),
         }
+        meta["analysis_only"] = True
+        meta["source_rows"] = str(args.rows)
+        meta["source_rows_sha256"] = file_digest(args.rows)
+        expected = rows[0].experiment.get("n_items")
+        meta["collection_status"] = "partial" if expected and len(rows) < expected else "complete_or_legacy_unknown"
     else:
         rows, meta = collect_rows(args)
-        write_rows(rows, out / "rows.jsonl")
 
     results = analyse(rows, meta, args)
-    (out / "metrics.json").write_text(
-        json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    write_json_atomic(json_compatible(results), out / "metrics.json")
     report_path = write_report(results, out / "REPORT.md")
 
     engine = results["signals"]["engine"]

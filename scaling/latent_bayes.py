@@ -26,6 +26,7 @@ observations) while letting the *input* dimensionality grow arbitrarily. The map
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Integral, Real
 from typing import Optional, Tuple
 
 import numpy as np
@@ -36,6 +37,12 @@ try:
     _HAVE_SKLEARN = True
 except Exception:  # pragma: no cover
     _HAVE_SKLEARN = False
+
+
+def _positive_integer(value: int, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return int(value)
 
 
 @dataclass
@@ -55,17 +62,33 @@ class GeneralDirichletGrid:
     alpha: np.ndarray = field(init=False)
 
     def __post_init__(self) -> None:
+        self.n_factors = _positive_integer(self.n_factors, "n_factors")
+        self.n_bins = _positive_integer(self.n_bins, "n_bins")
+        self.n_outcomes = _positive_integer(self.n_outcomes, "n_outcomes")
+        if (isinstance(self.prior, (bool, np.bool_)) or not isinstance(self.prior, Real)
+                or not np.isfinite(self.prior) or self.prior <= 0):
+            raise ValueError("prior must be finite and positive")
+        if not np.isfinite(self.prior * self.n_outcomes):
+            raise ValueError("prior overflows the concentration sum")
         self.n_contexts = self.n_bins ** self.n_factors
         self.alpha = np.full((self.n_contexts, self.n_outcomes), self.prior, dtype=float)
 
     def _ctx(self, bins: np.ndarray) -> int:
+        bins = np.asarray(bins)
+        if bins.shape != (self.n_factors,) or bins.dtype.kind not in "iu":
+            raise ValueError(f"bins must contain exactly {self.n_factors} integer indices")
+        if ((bins < 0) | (bins >= self.n_bins)).any():
+            raise ValueError(f"bin indices must be in 0..{self.n_bins - 1}")
         idx = 0
         for b in bins:
             idx = idx * self.n_bins + int(b)
         return idx
 
     def observe(self, bins: np.ndarray, outcome: int) -> None:
-        self.alpha[self._ctx(bins), outcome] += 1.0
+        if (isinstance(outcome, (bool, np.bool_)) or not isinstance(outcome, Integral)
+                or not 0 <= outcome < self.n_outcomes):
+            raise ValueError(f"outcome must be an integer in 0..{self.n_outcomes - 1}")
+        self.alpha[self._ctx(bins), int(outcome)] += 1.0
 
     def predictive(self, bins: np.ndarray) -> np.ndarray:
         a = self.alpha[self._ctx(bins)]
@@ -87,6 +110,9 @@ class LatentBayesPipeline:
     def __post_init__(self) -> None:
         if not _HAVE_SKLEARN:  # pragma: no cover
             raise ImportError("scikit-learn is required for the scaling pipeline")
+        self.n_components = _positive_integer(self.n_components, "n_components")
+        self.n_bins = _positive_integer(self.n_bins, "n_bins")
+        self.n_outcomes = _positive_integer(self.n_outcomes, "n_outcomes")
         self.scaler = StandardScaler()
         self.pca = PCA(n_components=self.n_components, random_state=self.random_state)
         self.grid = GeneralDirichletGrid(self.n_components, self.n_bins, self.n_outcomes)
@@ -94,14 +120,26 @@ class LatentBayesPipeline:
 
     # ---------------------------------------------------------------- fitting
     def fit_projection(self, X: np.ndarray) -> "LatentBayesPipeline":
-        """Learn the scaler, PCA basis, and per-axis quantile bin edges."""
-        Z = self.pca.fit_transform(self.scaler.fit_transform(X))
+        """Learn the projection and reset counts whose bin meanings have changed.
+
+        A failed fit leaves the previous fitted model intact.
+        """
+        X = np.asarray(X)
+        if X.ndim != 2 or X.dtype.kind not in "iuf" or not np.isfinite(X).all():
+            raise ValueError("signals must be a finite real-valued matrix")
+        scaler = StandardScaler()
+        pca = PCA(n_components=self.n_components, random_state=self.random_state)
+        Z = pca.fit_transform(scaler.fit_transform(X))
         qs = np.linspace(0, 100, self.n_bins + 1)[1:-1]
-        self._edges = [np.percentile(Z[:, i], qs) for i in range(self.n_components)]
+        edges = [np.percentile(Z[:, i], qs) for i in range(self.n_components)]
+        self.scaler, self.pca, self._edges = scaler, pca, edges
+        self.grid = GeneralDirichletGrid(self.n_components, self.n_bins, self.n_outcomes)
         return self
 
     def to_bins(self, X: np.ndarray) -> np.ndarray:
         """Project raw signals to discrete latent bin indices, shape (n, n_components)."""
+        if self._edges is None:
+            raise ValueError("fit_projection must be called before projecting signals")
         Z = self.pca.transform(self.scaler.transform(np.atleast_2d(X)))
         bins = np.empty_like(Z, dtype=int)
         for i in range(self.n_components):
@@ -110,7 +148,13 @@ class LatentBayesPipeline:
 
     def update(self, X: np.ndarray, outcomes: np.ndarray) -> "LatentBayesPipeline":
         """Conjugate update from observed (signal, outcome) pairs."""
-        for b, y in zip(self.to_bins(X), outcomes, strict=False):
+        bins = self.to_bins(X)
+        outcomes = np.asarray(outcomes)
+        if outcomes.shape != (len(bins),) or outcomes.dtype.kind not in "iu":
+            raise ValueError("outcomes must contain one integer label per signal row")
+        if ((outcomes < 0) | (outcomes >= self.n_outcomes)).any():
+            raise ValueError(f"outcomes must be in 0..{self.n_outcomes - 1}")
+        for b, y in zip(bins, outcomes, strict=True):
             self.grid.observe(b, int(y))
         return self
 
